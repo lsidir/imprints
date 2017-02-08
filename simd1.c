@@ -26,13 +26,13 @@ void printBits(size_t const size, void const * const ptr)
         {
             byte = b[i] & (1<<j);
             byte >>= j;
-            printf("%u", byte);
+            printf("%c", byte == 0 ? '_' : 'X');
         }
     }
     puts("");
 }
 
-inline __m256i setbit_256(__m256i x,int k){
+__m256i setbit_256(__m256i x,int k){
 // constants that will (hopefully) be hoisted out of a loop after inlining  
   __m256i indices = _mm256_set_epi32(224,192,160,128,96,64,32,0);
   __m256i one = _mm256_set1_epi32(-1);
@@ -48,37 +48,66 @@ inline __m256i setbit_256(__m256i x,int k){
 }
 
 
+#define IMPRINT_BITS 256
+#define VALUES_PER_IMPRINT 256
+
+#define VALUE_BITS 32
+
+
 int main(int argc,char** argv) {
-	int values[8] = {-2, 10, 20, 50, 100, 42, 140, 200};
-	int limits[4] = {0, 5, 100, 150};
+	int n = IMPRINT_BITS * 1000; // nicely divisible by 8 and 256
+
+	int* values       = malloc(sizeof(int) * n);
+	char* value_ptr   = (char*) values;
+	int* limits       = malloc(sizeof(int) * IMPRINT_BITS);
+	__m256i* imprints = calloc(sizeof(__m256i) * n/IMPRINT_BITS, 1);
+
+	if (!values || !limits || !imprints) {
+		return -1;
+	}
+	// generate some values
+	for (int i = 0; i < n; i++) {
+		values[i] = i; // best case for imprints, yes?
+	}
+	// some even-spaced limits
+	for (int i = 0; i < IMPRINT_BITS; i++) {
+		limits[i] = i* n/IMPRINT_BITS;
+	}
 
 	__m256i zero        = _mm256_setzero_si256();
 	__m256i one         = _mm256_set1_epi32(1);
-
-	__m256i values_v    = _mm256_load_si256((__m256i*) values);
-	__m256i result      = _mm256_setzero_si256();
 
 	__m256i bitmasks[256];
 	for (int i = 0; i < 256; i++) {
 		bitmasks[i] = setbit_256(zero, i);
 	}
 
-	for (int l = 0; l < 4; l++) {
-		__m256i limit1  = _mm256_set1_epi32 (limits[l]);
-		__m256i result1 = _mm256_cmpgt_epi32(values_v, limit1);
-		__m256i result2 = _mm256_and_si256(result1, one);
-		result          = _mm256_add_epi32  (result, result2);
+	for (int chunk = 0; chunk < n/VALUES_PER_IMPRINT; chunk++) {
+
+		for (int chunk2 = 0; chunk2 < 32; chunk2++){
+
+			__m256i values_v    = _mm256_load_si256((__m256i*) value_ptr);
+			__m256i result      = _mm256_setzero_si256();
+
+			// TODO: Do this in larger groups
+			for (int l = 0; l < IMPRINT_BITS - 1; l++) {
+				__m256i limit1  = _mm256_set1_epi32 (limits[l]);
+				__m256i result1 = _mm256_cmpgt_epi32(values_v, limit1);
+				// turn -1 from cmpgt into 1
+				__m256i result2 = _mm256_and_si256(result1, one);
+				result          = _mm256_add_epi32  (result, result2);
+			}
+			
+			// todo: can we do better here going from indices to bit patterns?
+			for (int i = 0; i < IMPRINT_BITS/VALUE_BITS; i++) {
+				imprints[chunk] = _mm256_or_si256(imprints[chunk], bitmasks[_mm256_extract_epi32(result, i)]);
+			}
+			value_ptr += sizeof(__m256i);
+
+		}
+		printBits(sizeof(__m256i), &imprints[chunk]);
 	}
 
-	dump(result);
-
-	__m256i imprint = _mm256_setzero_si256();
-
-	for (int i = 0; i < 8; i++) {
-		imprint = _mm256_or_si256(imprint, bitmasks[_mm256_extract_epi32(result, i)]);
-
-	}
-	printBits(sizeof(__m256i), &imprint);
 
 	return 0;
 }
