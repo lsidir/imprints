@@ -59,8 +59,6 @@ long histogram[BITS]; /* of bin fillers */
 long vectors[BITS+1];
 int HISTO_TYPE=0; /*which type of histogram to build*/
 
-int materialize = 1; /* oid list or aggregate construction */
-
 int bitcover(long histo[BITS]){
 	int i, c=0;
 	for( i = 0; i< bins; i++)
@@ -405,150 +403,129 @@ void genQueryRange(int i, int flag)
 
 void queries()
 {
-	int e,i,k, n;
-	long m = 0, tf;
+	unsigned long *oids, oid, k, j, lim;
+	long m;
 	long tuples[REPETITION];
-	long j,l,lim,low = 0, high = 0, total, bit, basetime, cfptime, zonetime, wahtime;
-	long basetimer[REPETITION], cfptimer[REPETITION], zonetimer[REPETITION], wahtimer[REPETITION];
-	long *oids, oid =0;
-	unsigned char *merge;
-	unsigned char *bitmask8 = (unsigned char *)bitmask;
-	unsigned short *bitmask16 = (unsigned short *)bitmask;
-	unsigned int *bitmask32 = (unsigned int *) bitmask;
-	unsigned long *bitmask64 = (unsigned long *) bitmask;
-	long bindex[REPETITION], bcomparisons[REPETITION];
-	long zindex[REPETITION], zcomparisons[REPETITION];
-	long findex[REPETITION], fcomparisons[REPETITION];
-	long windex[REPETITION], wcomparisons[REPETITION];
+	long basetime,                 zonetime,                 impstime;
+	long basetimer[REPETITION],    zonetimer[REPETITION],    impstimer[REPETITION];
+	long bindex[REPETITION],       zindex[REPETITION],       iindex[REPETITION];
+	long bcomparisons[REPETITION], zcomparisons[REPETITION], icomparisons[REPETITION];
+	int i;
 
-	if (materialize){
-		oids = (long *) malloc(colcount * sizeof(long));
-		merge = (unsigned char *) malloc(colcount/8+1);
+
+	int n;
+	long tf;
+	long l, low = 0, high = 0, total, bit;
+	unsigned char  *bitmask8  = (unsigned char *)bitmask;
+	unsigned short *bitmask16 = (unsigned short *)bitmask;
+	unsigned int   *bitmask32 = (unsigned int *) bitmask;
+	unsigned long  *bitmask64 = (unsigned long *) bitmask;
+
+	oids  = (unsigned long *) malloc(colcount * sizeof(unsigned long));
+	oid   = 0;
+	m     = 0;
+
+	for (i = 0; i < REPETITION; i++) {
+		tuples[i] = 0;
+		basetimer[i] = impstimer[i] = zonetimer[i] = 0;
+		bindex[i] = iindex[i] = zindex[i] = 0;
+		bcomparisons[i] = icomparisons[i] = zcomparisons[i] = 0;
 	}
 
-	(void) wahtime;
-	(void) wahtimer;
-	for (e=0; e < EXPERIMENTS; e++) {
-		oid = 0; m=0;
-		for (i =0; i< REPETITION; i++)
-			tuples[i]= basetimer[i] = cfptimer[i] = zonetimer[i] = wahtimer[i] = bindex[i] = bcomparisons[i] = zindex[i] = zcomparisons[i] =  findex[i] = fcomparisons[i] =  windex[i] = wcomparisons[i] = 0;
+	for (i = 0; i < REPETITION; i++) {
+		/* select a random range from the pool, leads to bias to skew data distribution */
+		/* use [slow,shigh) range expression */
+		genQueryRange(i, BITRANGE);
 
-		for (i= 0; i < REPETITION; i++) {
-				/* select a random range from the pool, leads to bias to skew data distribution */
-				/* use [slow,shigh) range expression */
-				genQueryRange(i,BITRANGE);
+		/* simple scan */
+		m   = 0;
+		oid = 0;
 
-				/* simple scan */
-				m = 0;
-				oid =0;
+		#define simplescan(X,T) \
+			basetime = usec();					\
+			for (k = 0; k < colcount; k++) {	\
+				STATS bcomparisons[i] += 1;		\
+				if (((T*)col)[k] < shigh.X && ((T*)col)[k] >= slow.X ) {\
+					oids[oid++] = k;\
+				}\
+			}
+		switch(coltype){
+		case TYPE_bte:
+			simplescan(bval, char);
+			break;
+		case TYPE_sht:
+			simplescan(sval, short);
+			break;
+		case TYPE_int:
+			simplescan(ival, int);
+			break;
+		case TYPE_lng:
+			simplescan(lval, long);
+			break;
+		case TYPE_oid:
+			simplescan(ulval, unsigned long);
+			break;
+		case TYPE_flt:
+			simplescan(fval, float);
+			break;
+		case TYPE_dbl:
+			simplescan(dval, double);
+			break;
+		}
+		basetimer[i] = usec() - basetime;
+		tuples[i] = oid; /* for result error checking */
+		fprintf(devnull, "m = %ld ", m); /* to break compiler optimizations, which may lead to empty loops */
 
-	#define simplescan(F,X,T) \
-					/*printf("zone scan [%"F" -  %"F")\n",slow.X, shigh.X);*/\
-					basetime = usec(); /* start timer after printf */ \
-					if (materialize) {\
-						for (k = 0; k<colcount; k++) { \
-							STATS bcomparisons[i] += 1; \
-							if (((T*)col)[k] < shigh.X && ((T*)col)[k] >= slow.X )\
-								{oids[oid++]=k;}\
-						} \
-					} else {\
-						for (k = 0; k< colcount; k++)\
-						if (((T*)col)[k] < shigh.X && ((T*)col)[k] >= slow.X )\
-							{oid++; m += ((T*)col)[k] ;}\
-					}
-				switch(coltype){
-				case TYPE_bte:
-					simplescan("d",bval,char);
-					break;
-				case TYPE_sht:
-					simplescan("d",sval,short);
-					break;
-				case TYPE_int:
-					simplescan("d",ival,int);
-					break;
-				case TYPE_lng:
-					simplescan("ld",lval,long);
-					break;
-				case TYPE_oid:
-					simplescan("lu",ulval,unsigned long);
-					break;
-				case TYPE_flt:
-					simplescan("f",fval,float);
-					break;
-				case TYPE_dbl:
-					simplescan("g",dval,double);
-					break;
-				}
-				basetime = usec()-basetime;
-				basetimer[i] += basetime;
-				tuples[i] = oid;
-				fprintf(devnull,"m = %ld ", m); /* to break compiler optimizations, which may lead to empty loops */
-
-				/* zone map filter */
-				m = 0;
-				oid=0;
-				/* watch out, the zones are closed (min,max) intervals */
-	#define zonequery(X,T)\
-			zonetime = usec(); \
-			if (materialize) { \
-				for (j=0; j< zonetop; j++) { \
-					STATS zindex[i] += 1; \
-					if (slow.X <= zmap[j].min.X && shigh.X > zmap[j].max.X) { /* all qualify */ \
-						for (k = j * rpp, lim = k + rpp < colcount? k+rpp:colcount; k< lim; k++) {\
-							oids[oid++] = k;\
+		/* zonesmaps scan */
+		m   = 0;
+		oid = 0;
+		/* watch out, the zones are closed (min,max) intervals */
+		#define zonequery(X,T) \
+			zonetime = usec();					\
+			for (j = 0; j < zonetop; j++) {		\
+				STATS zindex[i] += 1;			\
+				if (slow.X <= zmap[j].min.X && shigh.X > zmap[j].max.X) { /* all qualify */			\
+					for (k = j * rpp, lim = k + rpp < colcount ? k+rpp : colcount; k < lim; k++) {	\
+						oids[oid++] = k;															\
+					}																				\
+				} else if (!(shigh.X <= zmap[j].min.X || slow.X > zmap[j].max.X)) {					\
+					/* zone maps are inclusive */													\
+					for (k = j * rpp, lim = k + rpp < colcount ? k+rpp : colcount; k < lim; k++) {	\
+						STATS zcomparisons[i] += 1;													\
+						if (((T*)col)[k] < shigh.X && ((T*)col)[k] >= slow.X ) {					\
+							oids[oid++] = k;														\
 						}\
-					} else if ( ! (shigh.X <= zmap[j].min.X || slow.X > zmap[j].max.X)) { \
-						/* zone maps are inclusive */ \
-						for ( k = j * rpp, lim = k + rpp < colcount? k+rpp:colcount; k< lim; k++) { \
-							STATS zcomparisons[i] += 1; \
-							if (((T*)col)[k] < shigh.X && ((T*)col)[k] >= slow.X ) {\
-								oids[oid++]= k; \
-							}\
-						} \
-					}\
-				} \
-			} else {\
-				for (j=0; j< zonetop; j++) { \
-					if (slow.X <= zmap[j].min.X && shigh.X > zmap[j].max.X) { /* all qualify */ \
-						for ( k = j * rpp, lim = k + rpp < colcount? k+rpp:colcount; k< lim; k++) \
-							{m += ((T*)col)[k];} \
-					} else if ( ! (shigh.X <= zmap[j].min.X || slow.X > zmap[j].max.X)) { \
-						/* zone maps are inclusive */ \
-						for (k = j * rpp, lim = k + rpp < colcount? k+rpp:colcount; k< lim; k++) \
-							if (((T*)col)[k]< shigh.X && ((T*)col)[k]>= slow.X) \
-								{m += ((T*)col)[k];} \
 					} \
 				}\
 			}
 
-				switch(coltype){
-				case TYPE_bte:
-					zonequery(bval,char);
-					break;
-				case TYPE_sht:
-					zonequery(sval,short);
-					break;
-				case TYPE_int:
-					zonequery(ival,int);
-					break;
-				case TYPE_lng:
-					zonequery(lval,long);
-					break;
-				case TYPE_oid:
-					zonequery(ulval,unsigned long);
-					break;
-				case TYPE_flt:
-					zonequery(fval,float);
-					break;
-				case TYPE_dbl:
-					zonequery(dval,double);
-				}
+		switch(coltype){
+		case TYPE_bte:
+			zonequery(bval,char);
+			break;
+		case TYPE_sht:
+			zonequery(sval,short);
+			break;
+		case TYPE_int:
+			zonequery(ival,int);
+			break;
+		case TYPE_lng:
+			zonequery(lval,long);
+			break;
+		case TYPE_oid:
+			zonequery(ulval,unsigned long);
+			break;
+		case TYPE_flt:
+			zonequery(fval,float);
+			break;
+		case TYPE_dbl:
+			zonequery(dval,double);
+		}
 
-				zonetime = usec()-zonetime;
-				zonetimer[i] += zonetime;
-				if (tuples[i] != oid)
-					printf("%s base %ld zonemap %ld differ\n", colname, tuples[i], oid);
-				fprintf(devnull," %ld",m);          /* to break compiler optimizations */
+		zonetimer[i] = usec() - zonetime;
+		if (tuples[i] != oid) /* correct result check */
+			printf("%s base %ld zonemap %ld differ\n", colname, tuples[i], oid);
+		fprintf(devnull," %ld",m); /* to break compiler optimizations */
 
 				/* construct filter mask, take care of overflow */
 				bit = 1;
@@ -661,9 +638,8 @@ void queries()
 					wahtimer[0] += wahtimer[i];
 				}
 		}
-	}
-	if (materialize)
-		free(oids);
+	
+	free(oids);
 }
 
 void
@@ -1066,11 +1042,11 @@ imprints()
 	}
 	masktop=0;
 
-#define GETBIT(Z, X)				\
-do {								\
-	int _i;							\
-	Z = 0;							\
-	for (_i = 1; _i < bins; _i++)	\
+#define GETBIT(Z, X)					\
+do {									\
+	int _i;								\
+	Z = 0;								\
+	for (_i = 1; _i < bins; _i++)		\
 		Z += ((val.X) >= mibins[_i].X);	\
 } while (0)
 
