@@ -91,12 +91,12 @@ int main(int argc,char** argv) {
 
 			// TODO: Do this in larger groups
 			for (int l = 0; l < IMPRINT_BITS - 1; l++) {
-				__m256i limit1  = _mm256_set1_epi32 (limits[l]);
+				__m256i limit1  = _mm256_set1_epi32(limits[l]);
 				__m256i result1 = _mm256_cmpgt_epi32(values_v, limit1);
 				// turn -1 from cmpgt into 1
-				__m256i result2 = _mm256_and_si256(result1, one);
-				result          = _mm256_add_epi32  (result, result2);
+				result          = _mm256_add_epi32(result, result1);
 			}
+			result = _mm256_abs_epi32(result);
 			
 			// todo: can we do better here going from indices to bit patterns?
 			for (int i = 0; i < IMPRINT_BITS/VALUE_BITS; i++) {
