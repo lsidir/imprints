@@ -13,17 +13,19 @@
 #define BITS      64
 #define MAX_IMPS  50000000
 #define SAMPLE_SZ 2048
+#define REPETITION  10   /* how many times to repeat each experiment to get an avg */
 
-#define REPETITION  10
-#define EXPERIMENTS 1
+
+
 #define BITRANGE    1    /* search by bin 1 or by sampling the data 0 */
 
+/* printing options */
 #define STATS if (1)
 #define VERBOSE if (1)
 
-//#define COARSE
+#undef COARSE
 #ifdef COARSE
-#define PAGESIZE sysconf(_SC_PAGESIZE) /*normal page size */
+#define PAGESIZE sysconf(_SC_PAGESIZE) /* normal page size */
 #else
 #define PAGESIZE 64
 #endif
