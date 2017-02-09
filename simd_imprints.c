@@ -403,7 +403,7 @@ void genQueryRange(int i, int flag)
 
 void queries()
 {
-	unsigned long *oids, oid, k, j, lim;
+	unsigned long *oids, oid, k, j, lim, n, tf, l;
 	long m;
 	long tuples[REPETITION];
 	long basetime,                 zonetime,                 impstime;
@@ -413,12 +413,11 @@ void queries()
 	int i;
 
 
-	int n;
-	long tf;
-	long l, low = 0, high = 0, total, bit;
-	unsigned char  *bitmask8  = (unsigned char *)bitmask;
+	long low = 0, high = 0, total;
+
+	unsigned char  *bitmask8  = (unsigned char *) bitmask;
 	unsigned short *bitmask16 = (unsigned short *)bitmask;
-	unsigned int   *bitmask32 = (unsigned int *) bitmask;
+	unsigned int   *bitmask32 = (unsigned int *)  bitmask;
 	unsigned long  *bitmask64 = (unsigned long *) bitmask;
 
 	oids  = (unsigned long *) malloc(colcount * sizeof(unsigned long));
@@ -527,101 +526,97 @@ void queries()
 			printf("%s base %ld zonemap %ld differ\n", colname, tuples[i], oid);
 		fprintf(devnull," %ld",m); /* to break compiler optimizations */
 
-				/* construct filter mask, take care of overflow */
-				bit = 1;
-				/* column imprint filter */
-				n = 0;
-				tf = 0;
-				m = 0;
-				oid=0;
-	#define cfpquery(X,T,B) \
-			cfptime = usec(); \
-			if (materialize) {\
-				for (j =0; j< imptop; j++) {\
-					if(cfp[j].repeated == 0 ){\
-						for( k=tf + cfp[j].blks; tf < k; n++, tf++) { \
-							STATS findex[i] += 1; \
-							if ( bitmask##B[tf] & mask) { \
-								register T val; \
-								l= n * rpp; \
-								lim = l+ rpp; \
-								lim = lim > colcount? colcount: lim;\
-								if ( (bitmask##B[tf] & ~innermask) == 0) { \
-									for(; l < lim; l++) \
-									{oids[oid++]= l;}\
-								} else { \
-									for (val = ((T*)col)[l] ; l < lim; l++, val = ((T*)col)[l]) { \
-										STATS fcomparisons[i] += 1; \
-										if ( val< shigh.X && val >= slow.X  ) { \
-											oids[oid++]= l; \
-										}\
-									} \
-								} \
-							}\
-						}\
-					} else { /* repeated mask case */\
-						STATS findex[i] += 1; \
-						if ( bitmask##B[tf] & mask) { \
-							register T val;\
-							l= n * rpp; \
-							lim = l+ rpp * cfp[j].blks; \
-							lim = lim > colcount? colcount: lim;\
-							if ( (bitmask##B[tf] & ~innermask) == 0) { \
-								for (; l < lim; l++) { \
-									oids[oid++]= l;\
-								}\
-							} else { \
-								for (val = ((T*)col)[l] ; l < lim; l++, val = ((T*)col)[l]) {\
-									STATS fcomparisons[i] += 1; \
-									if ( val< shigh.X && val >= slow.X  ) {\
-										oids[oid++]= l;\
-									}\
-								}\
-							}\
-						}\
-						n += cfp[j].blks;\
-						tf ++; \
-					}\
-				} \
-			} /* non-materialized case to be done */
-
-	#define binchoose(X,T) \
-		switch(bins) {\
-			case 8: cfpquery(X,T,8); break; \
-			case 16: cfpquery(X,T,16); break; \
-			case 32: cfpquery(X,T,32); break; \
-			case 64: cfpquery(X,T,64); break; \
-			default: break; \
+		/* column imprint filter */
+		n   = 0;
+		tf  = 0;
+		m   = 0;
+		oid = 0;
+		#define impsquery(X, T, B)											\
+			impstime = usec();													\
+			for (j = 0; j < imptop; j++) {										\
+				if (imprint[j].repeated == 0) {									\
+					for (k = tf + imprint[j].blks; tf < k; n++, tf++) {			\
+						STATS iindex[i] += 1;									\
+						if (bitmask##B[tf] & mask) {							\
+							register T val;										\
+							l = n * rpp;										\
+							lim = l + rpp;										\
+							lim = lim > colcount ? colcount: lim;				\
+							if ((bitmask##B[tf] & ~innermask) == 0) {			\
+								for (; l < lim; l++) {							\
+									oids[oid++] = l;							\
+								}												\
+							} else {											\
+								for (val = ((T*)col)[l]; l < lim; l++, val = ((T*)col)[l]) {	\
+									STATS icomparisons[i] += 1;					\
+									if (val < shigh.X && val >= slow.X) {		\
+										oids[oid++] = l;						\
+									}											\
+								}												\
+							}													\
+						}														\
+					}															\
+				} else { /* repeated mask case */								\
+					STATS iindex[i] += 1;										\
+					if (bitmask##B[tf] & mask) {								\
+						register T val;											\
+						l = n * rpp;											\
+						lim = l + rpp * cfp[j].blks;							\
+						lim = lim > colcount ? colcount : lim;					\
+						if ((bitmask##B[tf] & ~innermask) == 0) {				\
+							for (; l < lim; l++) {								\
+								oids[oid++] = l;								\
+							}													\
+						} else {												\
+							for (val = ((T*)col)[l]; l < lim; l++, val = ((T*)col)[l]) {	\
+								STATS icomparisons[i] += 1;						\
+								if (val < shigh.X && val >= slow.X  ) {			\
+									oids[oid++] = l;							\
+								}												\
+							}													\
+						}														\
+					}															\
+					n += imprint[j].blks;										\
+					tf++;														\
+				}\
 			}
 
-				switch(coltype){
-				case TYPE_bte:
-					binchoose(bval,char);
-					break;
-				case TYPE_sht:
-					binchoose(sval,short);
-					break;
-				case TYPE_int:
-					binchoose(ival,int);
-					break;
-				case TYPE_lng:
-					binchoose(lval,long);
-					break;
-				case TYPE_oid:
-					binchoose(ulval,unsigned long);
-					break;
-				case TYPE_flt:
-					binchoose(fval,float);
-					break;
-				case TYPE_dbl:
-					binchoose(dval,double);
-				}
-				cfptime = usec()- cfptime;
-				cfptimer[i] += cfptime;
-				if ( tuples[i] != oid)
-					printf("%s base %ld cfp %ld differ\n", colname, tuples[i], oid);
+		#define binchoose(X,T)					\
+			switch(bins) {						\
+			case 8:  impsquery(X,T,8); break;	\
+			case 16: impsquery(X,T,16); break;	\
+			case 32: impsquery(X,T,32); break;	\
+			case 64: impsquery(X,T,64); break;	\
+			default: break;						\
+			}
 
-				fprintf(devnull,"m = %ld\n",m); /* to break compiler optimizations */
+			switch(coltype){
+			case TYPE_bte:
+				binchoose(bval,char);
+				break;
+			case TYPE_sht:
+				binchoose(sval,short);
+				break;
+			case TYPE_int:
+				binchoose(ival,int);
+				break;
+			case TYPE_lng:
+				binchoose(lval,long);
+				break;
+			case TYPE_oid:
+				binchoose(ulval,unsigned long);
+				break;
+			case TYPE_flt:
+				binchoose(fval,float);
+				break;
+				case TYPE_dbl:
+				binchoose(dval,double);
+			}
+
+			impstimer[i] = usec() - impstime;
+			if (tuples[i] != oid)
+				printf("%s base %ld imprints %ld differ\n", colname, tuples[i], oid);
+			fprintf(devnull, "m = %ld\n", m); /* to break compiler optimizations */
 		}
 
 		for (i =0; i< REPETITION; i++) {
@@ -635,7 +630,6 @@ void queries()
 					basetimer[0] += basetimer[i];
 					cfptimer[0] += cfptimer[i];
 					zonetimer[0] += zonetimer[i];
-					wahtimer[0] += wahtimer[i];
 				}
 		}
 	
