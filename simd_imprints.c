@@ -1066,9 +1066,8 @@ void queries()
 
 
 	for (i =0; i< REPETITION; i++) {
-		VERBOSE printf("%s %s sorted %d select[%d] imprints %d zones %ld time %ld imprints %ld zone %ld tuples %ld %2.1f %%\n",
-		       colname, typename, sorted, i, imptop, zonetop,
-		       basetimer[i],impstimer[i], zonetimer[i], tuples[i], tuples[i]* 100.0/colcount);
+		VERBOSE printf("%s query[%d]=%ld\t selectivity=%2.1f%%\t|\tscan = %ld\timprints = %ld\tzone = %ld\t(usec)\n",
+		       colname, i, tuples[i], tuples[i]* 100.0/colcount, basetimer[i], impstimer[i], zonetimer[i]);
 		STATS printf ("bindex %ld bcomparisons %ld zindex %ld zcomparisons %ld iindex %ld icomparisons %ld\n",
 		       bindex[i], bcomparisons[i], zindex[i], zcomparisons[i], iindex[i], icomparisons[i]);
 
