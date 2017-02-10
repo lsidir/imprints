@@ -69,7 +69,7 @@ int main(int argc,char** argv) {
 	printf("Encoding %i values with %i bits\n", n, imprint_bits);
 	int* values       = malloc(sizeof(int) * n);
 	char* value_ptr   = (char*) values;
-	__m256i* limits       = malloc(sizeof(__m256i) * imprint_bits);
+	 __m256i*  restrict limits       = malloc(sizeof(__m256i) * imprint_bits);
 
 	// TODO: we should probably dynamically grow these?
 	__m256i* imprint_values = calloc(sizeof(__m256i) * n/VALUES_PER_IMPRINT, 1);
@@ -100,8 +100,6 @@ int main(int argc,char** argv) {
 	while (value_ptr < ((char*) values) + sizeof(int) * n) {
 		__m256i imprintv = zero;
 		for (int chunk2 = 0; chunk2 < 32; chunk2++){
-				//			printf("val %i\n", *value_ptr);
-
 			__m256i values_v    = _mm256_load_si256((__m256i*) value_ptr);
 			__m256i result      = zero;
 
@@ -131,12 +129,15 @@ int main(int argc,char** argv) {
 	}
 	// TODO: we do not know at this point whether chunk points to the last or the n+1 element
 
+	
+	stop();
+
 	// for (int ci = 0 ; ci <= chunk; ci++) {
 	// 	printBits(sizeof(__m256i), &imprint_values[ci]);
 
 	// }
 	printf("%i imprint(s)\n", chunk);
-	stop();
+
 /*
 	int range_start = 60;
 	int  range_stop = 65;
