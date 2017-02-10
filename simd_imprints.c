@@ -71,7 +71,8 @@ void isSorted();
 void zonemaps();
 void imprints();
 void imps_sample();
-void histogram(ValRecord *sample, int smp);
+void imps_histogram(ValRecord *sample, int smp);
+void queries();
 
 
 /* show the distribution graphically */
@@ -138,7 +139,7 @@ void printImprint()
 	ValRecord mx,mi;
 	int unique = 0;
 
-	printf("%s rpp=%d cfp cells %d zone cells %ld \n", colname, rpp, imptop, zonetop);
+	printf("%s rpp=%d imprint cells %d zone cells %ld \n", colname, rpp, imptop, zonetop);
 	printf("                 ");
 	for ( j =0; j< bins; j++)
 		printf("%c", j% 10 == 0?'0'+ j/10:'.');
@@ -153,8 +154,8 @@ void printImprint()
 	}
 
 	for ( i=0; i< imptop; i++) {
-		if (cfp[i].repeated == 0) {
-			for (j=0; j<cfp[i].blks;j++) {
+		if (imprint[i].repeated == 0) {
+			for (j=0; j<imprint[i].blks;j++) {
 				mi = zmap[blks].min;
 				mx = zmap[blks].max;
 				blks ++;
@@ -186,12 +187,12 @@ void printImprint()
 					printf(" %9.8f : %9.8f\n", mi.dval,  mx.dval);
 				}
 			}
-		} else { /* same imprint for cfp[i].blks next blocks */
+		} else { /* same imprint for imprint[i].blks next blocks */
 			unique++;
 			lzone = blks;
 			mi = zmap[lzone].min;
 			mx = zmap[lzone].max;
-			blks += cfp[i].blks;
+			blks += imprint[i].blks;
 			printf("[ %10d ]+  ", blks);
 			mask = getMask(tf);
 			printMask(mask,bins);
@@ -401,241 +402,6 @@ void genQueryRange(int i, int flag)
 	}
 }
 
-void queries()
-{
-	unsigned long *oids, oid, k, j, lim, n, tf, l;
-	long m;
-	long tuples[REPETITION];
-	long basetime,                 zonetime,                 impstime;
-	long basetimer[REPETITION],    zonetimer[REPETITION],    impstimer[REPETITION];
-	long bindex[REPETITION],       zindex[REPETITION],       iindex[REPETITION];
-	long bcomparisons[REPETITION], zcomparisons[REPETITION], icomparisons[REPETITION];
-	int i;
-
-
-	long low = 0, high = 0, total;
-
-	unsigned char  *bitmask8  = (unsigned char *) bitmask;
-	unsigned short *bitmask16 = (unsigned short *)bitmask;
-	unsigned int   *bitmask32 = (unsigned int *)  bitmask;
-	unsigned long  *bitmask64 = (unsigned long *) bitmask;
-
-	oids  = (unsigned long *) malloc(colcount * sizeof(unsigned long));
-	oid   = 0;
-	m     = 0;
-
-	for (i = 0; i < REPETITION; i++) {
-		tuples[i] = 0;
-		basetimer[i] = impstimer[i] = zonetimer[i] = 0;
-		bindex[i] = iindex[i] = zindex[i] = 0;
-		bcomparisons[i] = icomparisons[i] = zcomparisons[i] = 0;
-	}
-
-	for (i = 0; i < REPETITION; i++) {
-		/* select a random range from the pool, leads to bias to skew data distribution */
-		/* use [slow,shigh) range expression */
-		genQueryRange(i, BITRANGE);
-
-		/* simple scan */
-		m   = 0;
-		oid = 0;
-
-		#define simplescan(X,T) \
-			basetime = usec();					\
-			for (k = 0; k < colcount; k++) {	\
-				STATS bcomparisons[i] += 1;		\
-				if (((T*)col)[k] < shigh.X && ((T*)col)[k] >= slow.X ) {\
-					oids[oid++] = k;\
-				}\
-			}
-		switch(coltype){
-		case TYPE_bte:
-			simplescan(bval, char);
-			break;
-		case TYPE_sht:
-			simplescan(sval, short);
-			break;
-		case TYPE_int:
-			simplescan(ival, int);
-			break;
-		case TYPE_lng:
-			simplescan(lval, long);
-			break;
-		case TYPE_oid:
-			simplescan(ulval, unsigned long);
-			break;
-		case TYPE_flt:
-			simplescan(fval, float);
-			break;
-		case TYPE_dbl:
-			simplescan(dval, double);
-			break;
-		}
-		basetimer[i] = usec() - basetime;
-		tuples[i] = oid; /* for result error checking */
-		fprintf(devnull, "m = %ld ", m); /* to break compiler optimizations, which may lead to empty loops */
-
-		/* zonesmaps scan */
-		m   = 0;
-		oid = 0;
-		/* watch out, the zones are closed (min,max) intervals */
-		#define zonequery(X,T) \
-			zonetime = usec();					\
-			for (j = 0; j < zonetop; j++) {		\
-				STATS zindex[i] += 1;			\
-				if (slow.X <= zmap[j].min.X && shigh.X > zmap[j].max.X) { /* all qualify */			\
-					for (k = j * rpp, lim = k + rpp < colcount ? k+rpp : colcount; k < lim; k++) {	\
-						oids[oid++] = k;															\
-					}																				\
-				} else if (!(shigh.X <= zmap[j].min.X || slow.X > zmap[j].max.X)) {					\
-					/* zone maps are inclusive */													\
-					for (k = j * rpp, lim = k + rpp < colcount ? k+rpp : colcount; k < lim; k++) {	\
-						STATS zcomparisons[i] += 1;													\
-						if (((T*)col)[k] < shigh.X && ((T*)col)[k] >= slow.X ) {					\
-							oids[oid++] = k;														\
-						}\
-					} \
-				}\
-			}
-
-		switch(coltype){
-		case TYPE_bte:
-			zonequery(bval,char);
-			break;
-		case TYPE_sht:
-			zonequery(sval,short);
-			break;
-		case TYPE_int:
-			zonequery(ival,int);
-			break;
-		case TYPE_lng:
-			zonequery(lval,long);
-			break;
-		case TYPE_oid:
-			zonequery(ulval,unsigned long);
-			break;
-		case TYPE_flt:
-			zonequery(fval,float);
-			break;
-		case TYPE_dbl:
-			zonequery(dval,double);
-		}
-
-		zonetimer[i] = usec() - zonetime;
-		if (tuples[i] != oid) /* correct result check */
-			printf("%s base %ld zonemap %ld differ\n", colname, tuples[i], oid);
-		fprintf(devnull," %ld",m); /* to break compiler optimizations */
-
-		/* column imprint filter */
-		n   = 0;
-		tf  = 0;
-		m   = 0;
-		oid = 0;
-		#define impsquery(X, T, B)											\
-			impstime = usec();													\
-			for (j = 0; j < imptop; j++) {										\
-				if (imprint[j].repeated == 0) {									\
-					for (k = tf + imprint[j].blks; tf < k; n++, tf++) {			\
-						STATS iindex[i] += 1;									\
-						if (bitmask##B[tf] & mask) {							\
-							register T val;										\
-							l = n * rpp;										\
-							lim = l + rpp;										\
-							lim = lim > colcount ? colcount: lim;				\
-							if ((bitmask##B[tf] & ~innermask) == 0) {			\
-								for (; l < lim; l++) {							\
-									oids[oid++] = l;							\
-								}												\
-							} else {											\
-								for (val = ((T*)col)[l]; l < lim; l++, val = ((T*)col)[l]) {	\
-									STATS icomparisons[i] += 1;					\
-									if (val < shigh.X && val >= slow.X) {		\
-										oids[oid++] = l;						\
-									}											\
-								}												\
-							}													\
-						}														\
-					}															\
-				} else { /* repeated mask case */								\
-					STATS iindex[i] += 1;										\
-					if (bitmask##B[tf] & mask) {								\
-						register T val;											\
-						l = n * rpp;											\
-						lim = l + rpp * cfp[j].blks;							\
-						lim = lim > colcount ? colcount : lim;					\
-						if ((bitmask##B[tf] & ~innermask) == 0) {				\
-							for (; l < lim; l++) {								\
-								oids[oid++] = l;								\
-							}													\
-						} else {												\
-							for (val = ((T*)col)[l]; l < lim; l++, val = ((T*)col)[l]) {	\
-								STATS icomparisons[i] += 1;						\
-								if (val < shigh.X && val >= slow.X  ) {			\
-									oids[oid++] = l;							\
-								}												\
-							}													\
-						}														\
-					}															\
-					n += imprint[j].blks;										\
-					tf++;														\
-				}\
-			}
-
-		#define binchoose(X,T)					\
-			switch(bins) {						\
-			case 8:  impsquery(X,T,8); break;	\
-			case 16: impsquery(X,T,16); break;	\
-			case 32: impsquery(X,T,32); break;	\
-			case 64: impsquery(X,T,64); break;	\
-			default: break;						\
-			}
-
-			switch(coltype){
-			case TYPE_bte:
-				binchoose(bval,char);
-				break;
-			case TYPE_sht:
-				binchoose(sval,short);
-				break;
-			case TYPE_int:
-				binchoose(ival,int);
-				break;
-			case TYPE_lng:
-				binchoose(lval,long);
-				break;
-			case TYPE_oid:
-				binchoose(ulval,unsigned long);
-				break;
-			case TYPE_flt:
-				binchoose(fval,float);
-				break;
-				case TYPE_dbl:
-				binchoose(dval,double);
-			}
-
-			impstimer[i] = usec() - impstime;
-			if (tuples[i] != oid)
-				printf("%s base %ld imprints %ld differ\n", colname, tuples[i], oid);
-			fprintf(devnull, "m = %ld\n", m); /* to break compiler optimizations */
-		}
-
-		for (i =0; i< REPETITION; i++) {
-				printf("%s %s sorted %d select[%d] cfp %d zones %ld time %ld cfp %ld zone %ld wah %ld tuples %ld %2.1f %%\n",
-					colname, typename, sorted, i, imptop, zonetop, 
-					basetimer[i],cfptimer[i],zonetimer[i], wahtimer[i], tuples[i], tuples[i]* 100.0/colcount);
-
-				STATS printf ("bindex %ld bcomparisons %ld zindex %ld zcomparisons %ld findex %ld fcomparisons %ld windex %ld wcomparisons %ld\n", bindex[i], bcomparisons[i], zindex[i], zcomparisons[i], findex[i], fcomparisons[i], windex[i], wcomparisons[i] );
-
-				if (i) {
-					basetimer[0] += basetimer[i];
-					cfptimer[0] += cfptimer[i];
-					zonetimer[0] += zonetimer[i];
-				}
-		}
-	
-	free(oids);
-}
-
 void
 stats(long timer)
 {
@@ -647,8 +413,8 @@ stats(long timer)
 		vectors[i]= histogram[i] = 0;
 
 	for (i=0; i<imptop; i++) {
-		for (k=0;k<cfp[i].blks;k++) {
-			if (cfp[i].repeated == 1) k = cfp[i].blks;
+		for (k=0;k<imprint[i].blks;k++) {
+			if (imprint[i].repeated == 1) k = imprint[i].blks;
 			bits = 0;
 			mask = getMask(tf);
 			globalmask |= mask;
@@ -666,7 +432,7 @@ stats(long timer)
 	//printf("global mask      ");
 	//printMask(globalmask,BITS);
 	//printf("\n");
-	printf("%s cfp size %ld creation time %ld  %ld usec per thousand\n", colname, colcount, timer, ((long)timer*1000)/colcount);
+	printf("%s imprint size %ld creation time %ld  %ld usec per thousand\n", colname, colcount, timer, ((long)timer*1000)/colcount);
 	printf("%s zonemap size %ld creation time %ld %ld usec per thousand \n", colname, colcount,  zone_create_time, ((long)zone_create_time*1000)/colcount);
 	/* comment uncomment for printing the imprints */
 	printHistogram(histogram, "Value distribution ");
@@ -783,7 +549,7 @@ int main(int argc, char **argv)
 		max.lval = 0;
 	} else {
 		printf("type %s not supported\n", typename);
-		return;
+		return -1;
 	}
 	absmin = max;
 	absmax = min;
@@ -791,13 +557,13 @@ int main(int argc, char **argv)
 	cfile = fopen(filename, "r");
 	if (cfile == NULL) {
 		printf("failed to open column file %s\n", filename);
-		return;
+		return -1;
 	}
 	fseek(cfile, 0, SEEK_END);
 	filesize = ftell(cfile);
 	if (filesize == 0){
 		printf("empty open column file %s\n", filename);
-		return;
+		return -1;
 	}
 	col = (char *) malloc(sizeof(col)*filesize);
 	if (col == 0) {
@@ -808,24 +574,24 @@ int main(int argc, char **argv)
 	if ((rd = fread(col, 1, filesize, cfile)) != filesize) {
 		printf("Could read only %ld of %ld bytes\n", rd, filesize);
 		fclose(cfile);
-		return 0;
+		return -1;
 	}
 	fclose(cfile);
 	devnull = fopen("/dev/null","a");
 	if (devnull == NULL){
 		printf("can not open /dev/null\n");
-		return 0;
+		return -1;
 	}
 
 	rpp = PAGESIZE/stride[coltype];
 	if (rpp == 0) {
 		printf("rows per pages is 0\n");
-		return;
+		return -1;
 	}
 	pages = colcount/rpp + 1;
 	if (pages > MAX_IMPS) {
 		printf("there are too many pages %ld\n", pages);
-		return;
+		return -1;
 	}
 
 	VERBOSE printf("%s imprint %s "
@@ -856,7 +622,7 @@ int main(int argc, char **argv)
 	imprints();
 	/*TODO: create simd_imprints(); */
 
-	STATS printf("%s storage comparison tuples %ld size %ld zonemap %ld %ld%% cfp %ld %ld%%",
+	STATS printf("%s storage comparison tuples %ld size %ld zonemap %ld %ld%% imprint %ld %ld%%",
 	             colname, colcount, filesize,
 	             zonetop * 2 * stride[coltype], ((long)zonetop * 2 * stride[coltype] * 100) / filesize,
 	             ((long) (masktop / (BITS/bins)) * sizeof(long) + imptop * sizeof(Imprint)),
@@ -875,7 +641,7 @@ int main(int argc, char **argv)
 	free(imprint);
 	free(bitmask);
 	free(zmap);
-	return;
+	return 1;
 }
 
 /* check if a column is sorted */
@@ -1164,17 +930,18 @@ void imps_sample()
 	case TYPE_dbl:
 		sampleDistribution(dval, double);
 	}
-	histogram(sample, j);
+	imps_histogram(sample, j);
 }
 
 void
-histogram(ValRecord *sample, int smp) {
+imps_histogram(ValRecord *sample, int smp) {
 	int k;
 
 	mibins[0] = absmin;
 	mxbins[0] = sample[0];
 	mibins[BITS-1] = sample[smp-1];
 	mxbins[BITS-1] = absmax;
+	bins = 64;
 
 	if (smp < BITS-1) {
 		for (k=1; k < smp; k++) {
@@ -1206,4 +973,238 @@ histogram(ValRecord *sample, int smp) {
 	STATS printf("sample gives %d unique values from %d and %d bins\n", smp, SAMPLE_SZ, bins);
 
 	return;
+}
+
+void queries()
+{
+	unsigned long *oids, oid, k, j, lim, n, tf, l;
+	long m;
+	long tuples[REPETITION];
+	long basetime,                 zonetime,                 impstime;
+	long basetimer[REPETITION],    zonetimer[REPETITION],    impstimer[REPETITION];
+	long bindex[REPETITION],       zindex[REPETITION],       iindex[REPETITION];
+	long bcomparisons[REPETITION], zcomparisons[REPETITION], icomparisons[REPETITION];
+	int i;
+
+
+	long low = 0, high = 0, total;
+
+	unsigned char  *bitmask8  = (unsigned char *) bitmask;
+	unsigned short *bitmask16 = (unsigned short *)bitmask;
+	unsigned int   *bitmask32 = (unsigned int *)  bitmask;
+	unsigned long  *bitmask64 = (unsigned long *) bitmask;
+
+	oids  = (unsigned long *) malloc(colcount * sizeof(unsigned long));
+	oid   = 0;
+	m     = 0;
+
+	for (i = 0; i < REPETITION; i++) {
+		tuples[i] = 0;
+		basetimer[i] = impstimer[i] = zonetimer[i] = 0;
+		bindex[i] = iindex[i] = zindex[i] = 0;
+		bcomparisons[i] = icomparisons[i] = zcomparisons[i] = 0;
+	}
+
+	for (i = 0; i < REPETITION; i++) {
+		/* select a random range from the pool, leads to bias to skew data distribution */
+		/* use [slow,shigh) range expression */
+		genQueryRange(i, BITRANGE);
+
+		/* simple scan */
+		m   = 0;
+		oid = 0;
+
+		#define simplescan(X,T) \
+			basetime = usec();					\
+			for (k = 0; k < colcount; k++) {	\
+				STATS bcomparisons[i] += 1;		\
+				if (((T*)col)[k] < shigh.X && ((T*)col)[k] >= slow.X ) {\
+					oids[oid++] = k;\
+				}\
+			}
+		switch(coltype){
+		case TYPE_bte:
+			simplescan(bval, char);
+			break;
+		case TYPE_sht:
+			simplescan(sval, short);
+			break;
+		case TYPE_int:
+			simplescan(ival, int);
+			break;
+		case TYPE_lng:
+			simplescan(lval, long);
+			break;
+		case TYPE_oid:
+			simplescan(ulval, unsigned long);
+			break;
+		case TYPE_flt:
+			simplescan(fval, float);
+			break;
+		case TYPE_dbl:
+			simplescan(dval, double);
+			break;
+		}
+		basetimer[i] = usec() - basetime;
+		tuples[i] = oid; /* for result error checking */
+		fprintf(devnull, "m = %ld ", m); /* to break compiler optimizations, which may lead to empty loops */
+
+		/* zonesmaps scan */
+		m   = 0;
+		oid = 0;
+		/* watch out, the zones are closed (min,max) intervals */
+		#define zonequery(X,T) \
+			zonetime = usec();					\
+			for (j = 0; j < zonetop; j++) {		\
+				STATS zindex[i] += 1;			\
+				if (slow.X <= zmap[j].min.X && shigh.X > zmap[j].max.X) { /* all qualify */			\
+					for (k = j * rpp, lim = k + rpp < colcount ? k+rpp : colcount; k < lim; k++) {	\
+						oids[oid++] = k;															\
+					}																				\
+				} else if (!(shigh.X <= zmap[j].min.X || slow.X > zmap[j].max.X)) {					\
+					/* zone maps are inclusive */													\
+					for (k = j * rpp, lim = k + rpp < colcount ? k+rpp : colcount; k < lim; k++) {	\
+						STATS zcomparisons[i] += 1;													\
+						if (((T*)col)[k] < shigh.X && ((T*)col)[k] >= slow.X ) {					\
+							oids[oid++] = k;														\
+						}\
+					} \
+				}\
+			}
+
+		switch(coltype){
+		case TYPE_bte:
+			zonequery(bval,char);
+			break;
+		case TYPE_sht:
+			zonequery(sval,short);
+			break;
+		case TYPE_int:
+			zonequery(ival,int);
+			break;
+		case TYPE_lng:
+			zonequery(lval,long);
+			break;
+		case TYPE_oid:
+			zonequery(ulval,unsigned long);
+			break;
+		case TYPE_flt:
+			zonequery(fval,float);
+			break;
+		case TYPE_dbl:
+			zonequery(dval,double);
+		}
+
+		zonetimer[i] = usec() - zonetime;
+		if (tuples[i] != oid) /* correct result check */
+			printf("%s base %ld zonemap %ld differ\n", colname, tuples[i], oid);
+		fprintf(devnull," %ld",m); /* to break compiler optimizations */
+
+		/* column imprint filter */
+		n   = 0;
+		tf  = 0;
+		m   = 0;
+		oid = 0;
+		#define impsquery(X, T, B)											\
+			impstime = usec();													\
+			for (j = 0; j < imptop; j++) {										\
+				if (imprint[j].repeated == 0) {									\
+					for (k = tf + imprint[j].blks; tf < k; n++, tf++) {			\
+						STATS iindex[i] += 1;									\
+						if (bitmask##B[tf] & mask) {							\
+							register T val;										\
+							l = n * rpp;										\
+							lim = l + rpp;										\
+							lim = lim > colcount ? colcount: lim;				\
+							if ((bitmask##B[tf] & ~innermask) == 0) {			\
+								for (; l < lim; l++) {							\
+									oids[oid++] = l;							\
+								}												\
+							} else {											\
+								for (val = ((T*)col)[l]; l < lim; l++, val = ((T*)col)[l]) {	\
+									STATS icomparisons[i] += 1;					\
+									if (val < shigh.X && val >= slow.X) {		\
+										oids[oid++] = l;						\
+									}											\
+								}												\
+							}													\
+						}														\
+					}															\
+				} else { /* repeated mask case */								\
+					STATS iindex[i] += 1;										\
+					if (bitmask##B[tf] & mask) {								\
+						register T val;											\
+						l = n * rpp;											\
+						lim = l + rpp * imprint[j].blks;							\
+						lim = lim > colcount ? colcount : lim;					\
+						if ((bitmask##B[tf] & ~innermask) == 0) {				\
+							for (; l < lim; l++) {								\
+								oids[oid++] = l;								\
+							}													\
+						} else {												\
+							for (val = ((T*)col)[l]; l < lim; l++, val = ((T*)col)[l]) {	\
+								STATS icomparisons[i] += 1;						\
+								if (val < shigh.X && val >= slow.X  ) {			\
+									oids[oid++] = l;							\
+								}												\
+							}													\
+						}														\
+					}															\
+					n += imprint[j].blks;										\
+					tf++;														\
+				}\
+			}
+
+		#define binchoose(X,T)					\
+			switch(bins) {						\
+			case 8:  impsquery(X,T,8); break;	\
+			case 16: impsquery(X,T,16); break;	\
+			case 32: impsquery(X,T,32); break;	\
+			case 64: impsquery(X,T,64); break;	\
+			default: break;						\
+			}
+
+		switch(coltype){
+		case TYPE_bte:
+			binchoose(bval,char);
+			break;
+		case TYPE_sht:
+			binchoose(sval,short);
+			break;
+		case TYPE_int:
+			binchoose(ival,int);
+			break;
+		case TYPE_lng:
+			binchoose(lval,long);
+			break;
+		case TYPE_oid:
+			binchoose(ulval,unsigned long);
+			break;
+		case TYPE_flt:
+			binchoose(fval,float);
+			break;
+			case TYPE_dbl:
+			binchoose(dval,double);
+		}
+
+		impstimer[i] = usec() - impstime;
+		if (tuples[i] != oid)
+			printf("%s base %ld imprints %ld differ\n", colname, tuples[i], oid);
+		fprintf(devnull, "m = %ld\n", m); /* to break compiler optimizations */
+	}
+
+	for (i =0; i< REPETITION; i++) {
+		printf("%s %s sorted %d select[%d] imprints %d zones %ld time %ld imprints %ld zone %ld tuples %ld %2.1f %%\n",
+		       colname, typename, sorted, i, imptop, zonetop,
+		       basetimer[i],impstimer[i], zonetimer[i], tuples[i], tuples[i]* 100.0/colcount);
+		printf ("bindex %ld bcomparisons %ld zindex %ld zcomparisons %ld iindex %ld icomparisons %ld\n",
+		       bindex[i], bcomparisons[i], zindex[i], zcomparisons[i], iindex[i], icomparisons[i]);
+
+		if (i) {
+			basetimer[0] += basetimer[i];
+			impstimer[0] += impstimer[i];
+			zonetimer[0] += zonetimer[i];
+		}
+	}
+	free(oids);
 }
