@@ -941,6 +941,7 @@ imps_histogram(ValRecord *sample, int smp) {
 	mxbins[0] = sample[0];
 	mibins[BITS-1] = sample[smp-1];
 	mxbins[BITS-1] = absmax;
+	bins = 64;
 
 	if (smp < BITS-1) {
 		for (k=1; k < smp; k++) {
