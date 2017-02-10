@@ -73,7 +73,7 @@ int main(int argc,char** argv) {
 	 __m256i*  restrict limits       = malloc(sizeof(__m256i) * imprint_bits);
 
 	// TODO: we should probably dynamically grow these?
-	__m256i* imprint_values = calloc(sizeof(__m256i) * n/VALUES_PER_IMPRINT, 1);
+	__m256i* imprint_values = malloc(sizeof(__m256i) * n/VALUES_PER_IMPRINT);
 	int*     imprint_counts = calloc(sizeof(int) * n/VALUES_PER_IMPRINT, 1);
 
 	if (!values || !limits || !imprint_values || !imprint_counts) {
