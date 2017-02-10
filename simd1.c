@@ -53,13 +53,14 @@ static inline void start()
     gettimeofday(&tm1, NULL);
 }
 
-static inline void stop()
+static inline size_t stop()
 {
     struct timeval tm2;
     gettimeofday(&tm2, NULL);
 
-    unsigned long long t = 1000 * (tm2.tv_sec - tm1.tv_sec) + (tm2.tv_usec - tm1.tv_usec) / 1000;
-    printf("%llu\n", t);
+    size_t t = 1000 * (tm2.tv_sec - tm1.tv_sec) + (tm2.tv_usec - tm1.tv_usec) / 1000;
+    printf("%lu ms runtime \n", t);
+    return t;
 }
 
 
@@ -80,7 +81,7 @@ int main(int argc,char** argv) {
 	}
 	// generate some values
 	for (int i = 0; i < n; i++) {
-		values[i] = i/2; // best case for imprints, yes?
+		values[i] = i/1000; // best case for imprints, yes?
 	}
 	// some even-spaced limits, pre-set SIMD words
 	for (int i = 0; i < imprint_bits; i++) {
@@ -95,7 +96,7 @@ int main(int argc,char** argv) {
 	}
 
 	start();
-	int chunk = 0;
+	int chunk = -1;
 	printf("n=%i, blocks=%i\n", n, n/VALUES_PER_IMPRINT);
 	while (value_ptr < ((char*) values) + sizeof(int) * n) {
 		__m256i imprintv = zero;
@@ -111,6 +112,7 @@ int main(int argc,char** argv) {
 						_mm256_cmpgt_epi32(values_v, limits[l1]),
 						_mm256_cmpgt_epi32(values_v, limits[l2])));
 			}
+
 			result = _mm256_abs_epi32(result);
 			
 			// in profiling, this was not performance-critical, but doing two at once also gave a slight perf advantage
@@ -122,21 +124,23 @@ int main(int argc,char** argv) {
 			value_ptr += sizeof(__m256i);
 		}
 		// _mm256_movemask_epi8 is a nice way of getting the result of a comparision into a normal int
-		int increment = chunk == 0 || _mm256_movemask_epi8(
+		int increment = chunk == -1 || _mm256_movemask_epi8(
 			_mm256_cmpeq_epi32(imprint_values[chunk], imprintv)) != -1;
 		chunk += increment;
 		imprint_values[chunk] = imprintv;
+		imprint_counts[chunk]++;
+
 	}
 	// TODO: we do not know at this point whether chunk points to the last or the n+1 element
+	size_t ms = stop();
 
-	
-	stop();
+	for (int ci = 0 ; ci <= chunk; ci++) {
+		printf("%5i %10i ", ci, imprint_counts[ci]);
+		printBits(sizeof(__m256i), &imprint_values[ci]);
 
-	// for (int ci = 0 ; ci <= chunk; ci++) {
-	// 	printBits(sizeof(__m256i), &imprint_values[ci]);
+	}
+	printf("%i imprint(s), %i Bytes, %f values per cycle\n", chunk, chunk*256/8, (n/ms)/3000000.0);
 
-	// }
-	printf("%i imprint(s)\n", chunk);
 
 /*
 	int range_start = 60;
