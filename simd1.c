@@ -80,7 +80,7 @@ int main(int argc,char** argv) {
 	}
 	// generate some values
 	for (int i = 0; i < n; i++) {
-		values[i] = 42; // best case for imprints, yes?
+		values[i] = i/2; // best case for imprints, yes?
 	}
 	// some even-spaced limits, pre-set SIMD words
 	for (int i = 0; i < imprint_bits; i++) {
@@ -114,8 +114,6 @@ int main(int argc,char** argv) {
 						_mm256_cmpgt_epi32(values_v, limits[l2])));
 			}
 			result = _mm256_abs_epi32(result);
-
-			//dump(result);
 			
 			// in profiling, this was not performance-critical, but doing two at once also gave a slight perf advantage
 			for (int i1 = 0, i2=1; i1 < imprint_bits/VALUE_BITS-1; i1+=2, i2+=2) {
@@ -126,10 +124,9 @@ int main(int argc,char** argv) {
 			value_ptr += sizeof(__m256i);
 		}
 		// _mm256_movemask_epi8 is a nice way of getting the result of a comparision into a normal int
-		int increment = chunk > 0 && _mm256_movemask_epi8(
+		int increment = chunk == 0 || _mm256_movemask_epi8(
 			_mm256_cmpeq_epi32(imprint_values[chunk], imprintv)) != -1;
 		chunk += increment;
-
 		imprint_values[chunk] = imprintv;
 	}
 	// TODO: we do not know at this point whether chunk points to the last or the n+1 element
