@@ -14,11 +14,14 @@
 #define MAX_IMPS  50000000
 #define SAMPLE_SZ 2048
 #define REPETITION  10   /* how many times to repeat each experiment to get an avg */
-#define BITRANGE    1    /* 1= search by bin. 0 = by sampling the data*/
+#define BITRANGE    1    /* 1 = search by bin. 0 = by sampling the data*/
 
 /* printing options */
-#define STATS if (1)
-#define VERBOSE if (1)
+#define STATS          if (0)
+#define VERBOSE        if (1)
+#define PRINT_HISTO    if (0)
+#define PRINT_IMPRINTS if (0)
+#define PRINT_QUERIES  if (0)
 
 #undef COARSE
 #ifdef COARSE

@@ -38,7 +38,7 @@ long zonetop;
  * The mask vector is simply compressed, keeping track on
  * the number of blocks it covers. From the blks we can
  * calculate the actual oid ranges, provided we scan only.
-*/
+ */
 #define MAXOFFSET 24
 typedef struct {
 	unsigned int blks:MAXOFFSET;
@@ -52,12 +52,15 @@ int imptop;
 int masktop;
 int bins;
 
-/* each column imprint is characterized by a partition vector */
+/* stat vars for imprints */
+long histogram[BITS]; /* bin filling */
+long vectors[BITS+1]; /* vector filling distribution */
 
-long histogram[BITS]; /* of bin fillers */
-/* vector filling distribution */
-long vectors[BITS+1];
-int HISTO_TYPE=0; /*which type of histogram to build*/
+
+/* global vars for queries */
+ValRecord slow, shigh;
+unsigned long mask;
+unsigned long innermask;
 
 int bitcover(long histo[BITS]){
 	int i, c=0;
@@ -72,7 +75,9 @@ void zonemaps();
 void imprints();
 void imps_sample();
 void imps_histogram(ValRecord *sample, int smp);
+void stats();
 void queries();
+void genQueryRange(int i);
 
 
 /* show the distribution graphically */
@@ -130,8 +135,6 @@ void printMask(long mask,int limit)
 		printf("%c", isSet(mask,j)?'x':'.');
 }
 
-
-/* we should calculate the selectivity per cell */
 void printImprint()
 {
 	int i,j, lzone, blks = 0,tf = 0;
@@ -247,197 +250,6 @@ void printImprint()
 		if(vectors[j])
 			printf("[%d] %ld ", j, vectors[j]);
 	printf("\n");
-}
-
-#define CMPVAL(X) \
-	if ( v1.X < v2.X ) return -1; \
-	if ( v1.X > v2.X ) return 1; \
-	return 0;
-
-static int
-cmpvalues(const void *p1, const void *p2)
-{
-	ValRecord v1 = *(ValRecord*)p1;
-	ValRecord v2 = *(ValRecord*)p2;
-	switch(coltype){
-	case TYPE_bte: CMPVAL(bval);
-	case TYPE_sht: CMPVAL(sval);
-	case TYPE_int: CMPVAL(ival);
-	case TYPE_lng: CMPVAL(lval);
-	case TYPE_oid: CMPVAL(ulval);
-	case TYPE_flt: CMPVAL(fval);
-	case TYPE_dbl: CMPVAL(dval);
-	}
-	return 0;
-}
-
-/* simulate a series of queries */
-/* to make it realistic, we better clean memory before each run, now we measure hot */
-/* in each case we are interested in both number of access and the total time. */
-ValRecord slow, shigh;
-unsigned long mask;
-unsigned long innermask;
-void genQueryRange(int i, int flag)
-{
-	long low, high;
-	int j;
-	int lastbit;
-	mask = 0;
-	innermask = 0;
-
-/* select a range based on the actual non-empty bins */
-	if (flag) {
-		for (lastbit = bins-1; lastbit >0; lastbit--)
-			if (isSet(globalmask, lastbit))
-				break;
-
-		low = 0 + (int)(rand() * 1.0 / RAND_MAX * lastbit);
-		high = low + i * lastbit/ (100.0/REPETITION);
-		if (high > lastbit)
-			high = lastbit;
-		if ( low > high)
-			low = high;
-		
-		do {
-			/* find at least one non-empty bin */
-			for (j = low; j <= high; j++)
-				if ( histogram[j]) goto foundrange;
-
-			if ( low > 0){
-				low--;
-				high--;
-			} else {
-				high = lastbit + (high-low);
-				low= lastbit;
-			}
-		} while (1);
-
-	foundrange:
-		for (; low < high; low++)
-			if (histogram[low]) break;
-
-		for (; high > low; high--)
-			if (histogram[high]) break;
-
-		for (j = low; j <= high; j++) {
-			mask = setBit(mask,j);
-		}
-		/* inner mask should only be set when range bounds call for it */
-		/* in this case we use full bins */
-		for (j = low+1; j <= high-1; j++) {
-			innermask = setBit(innermask,j);
-		}
-
-#define setqueryrange(X) \
-		slow.X = mibins[low].X; \
-		shigh.X = mxbins[high].X; \
-		printf("query             "); printMask(mask,BITS); putchar('\n'); \
-		printf("inner msk         "); printMask(innermask,BITS); putchar('\n');
-
-		switch(coltype){
-		case TYPE_bte:
-			setqueryrange(bval);
-			break;
-		case TYPE_sht:
-			setqueryrange(sval);
-			break;
-		case TYPE_int:
-			setqueryrange(ival);
-			break;
-		case TYPE_lng:
-			setqueryrange(lval);
-			break;
-		case TYPE_oid:
-			setqueryrange(ulval);
-			break;
-		case TYPE_flt:
-			setqueryrange(fval);
-			break;
-		case TYPE_dbl:
-			setqueryrange(dval);
-		}
-		return;
-	}
-
-/* random probing the source table leads to skewed searches*/
-	low = (int)(rand() * 1.0 / RAND_MAX * colcount);
-	high = (int)(rand() * 1.0 / RAND_MAX * colcount);
-
-#define setquerybound(X,T) \
-		if ( ((T*)col)[low] > ((T*)col)[high]){ j= low; low=high; high=j; } \
-		slow.X = ((T*)col)[low]; \
-		shigh.X = ((T*)col)[high]; \
-		/* now create the bit mask */ \
-		mask=0; for (j = 0; j < bins; j++) \
-		if (!(((T*)col)[low] >= mxbins[j].X|| ((T*)col)[high] < mibins[j].X)) \
-			mask = setBit(mask,j);\
-		printf("query        "); printMask(mask,bins); putchar('\n');
-
-	switch(coltype){
-	case TYPE_bte:
-		setquerybound(bval,char);
-		break;
-	case TYPE_sht:
-		setquerybound(sval,short);
-		break;
-	case TYPE_int:
-		setquerybound(ival,int);
-		break;
-	case TYPE_lng:
-		setquerybound(lval,long);
-		break;
-	case TYPE_oid:
-		setquerybound(ulval,unsigned long);
-		break;
-	case TYPE_flt:
-		setquerybound(fval,float);
-		break;
-	case TYPE_dbl:
-		setquerybound(dval,double);
-	}
-	/* assume that none of the bounds is included */
-	/* go for expensive boundary test if needed */
-	for (j = low+1; j <= high-1; j++) {
-		innermask = setBit(innermask,j);
-	}
-}
-
-void
-stats(long timer)
-{
-	long i, tf=0, k;
-	int j,bits;
-	unsigned long mask;
-
-	for (i=0; i<bins; i++)
-		vectors[i]= histogram[i] = 0;
-
-	for (i=0; i<imptop; i++) {
-		for (k=0;k<imprint[i].blks;k++) {
-			if (imprint[i].repeated == 1) k = imprint[i].blks;
-			bits = 0;
-			mask = getMask(tf);
-			globalmask |= mask;
-			for (j=0;j<bins;j++) {
-				if (isSet(mask,j)) {
-					bits++;
-					histogram[j]++;
-				}
-			}
-			vectors[bits]++;
-			tf++;
-		}
-	}
-
-	//printf("global mask      ");
-	//printMask(globalmask,BITS);
-	//printf("\n");
-	printf("%s imprint size %ld creation time %ld  %ld usec per thousand\n", colname, colcount, timer, ((long)timer*1000)/colcount);
-	printf("%s zonemap size %ld creation time %ld %ld usec per thousand \n", colname, colcount,  zone_create_time, ((long)zone_create_time*1000)/colcount);
-	/* comment uncomment for printing the imprints */
-	printHistogram(histogram, "Value distribution ");
-	printImprint();
-
 }
 
 /* calculate the statistics of the bits in the imprints */
@@ -622,12 +434,12 @@ int main(int argc, char **argv)
 	imprints();
 	/*TODO: create simd_imprints(); */
 
-	STATS printf("%s storage comparison tuples %ld size %ld zonemap %ld %ld%% imprint %ld %ld%%",
+	VERBOSE printf("%s tuples=%ld size=%ld(bytes), zonemap_sz=%ld(bytes) %ld%% #zones=%ld, imprints_sz=%ld(bytes) %ld%%,",
 	             colname, colcount, filesize,
-	             zonetop * 2 * stride[coltype], ((long)zonetop * 2 * stride[coltype] * 100) / filesize,
+	             zonetop * 2 * stride[coltype], ((long)zonetop * 2 * stride[coltype] * 100) / filesize, zonetop,
 	             ((long) (masktop / (BITS/bins)) * sizeof(long) + imptop * sizeof(Imprint)),
 	             100 * ((long) (masktop / (BITS/bins)) * sizeof(long) + imptop * sizeof(Imprint)) / filesize);
-	STATS printf(" total imprints %d total headers %d\n", masktop, imptop);
+	VERBOSE printf(" #imprints=%d #dict=%d\n", masktop, imptop);
 
 	/* run queries */
 	queries();
@@ -884,8 +696,37 @@ do {									\
 	/* end creation, stop timer */
 	imprints_create_time = usec()- t0;
 
-	/* stats gathering and printing */
-	stats(imprints_create_time);
+	/* stats gathering */
+	stats();
+
+	VERBOSE printf("%s imprints creation time=%ld, %ld usec per thousand values\n", colname, imprints_create_time, ((long)imprints_create_time*1000)/colcount);
+	VERBOSE printf("%s zonemap  creation time=%ld, %ld usec per thousand values\n", colname,  zone_create_time, ((long)zone_create_time*1000)/colcount);
+	PRINT_HISTO printHistogram(histogram, "Value distribution");
+	PRINT_IMPRINTS printImprint();
+
+}
+
+static int
+cmpvalues(const void *p1, const void *p2)
+{
+	ValRecord v1 = *(ValRecord *) p1;
+	ValRecord v2 = *(ValRecord *) p2;
+
+#define CMPVAL(X) \
+	if ( v1.X < v2.X ) return -1; \
+	if ( v1.X > v2.X ) return 1; \
+	return 0;
+
+	switch (coltype) {
+		case TYPE_bte: CMPVAL(bval);
+		case TYPE_sht: CMPVAL(sval);
+		case TYPE_int: CMPVAL(ival);
+		case TYPE_lng: CMPVAL(lval);
+		case TYPE_oid: CMPVAL(ulval);
+		case TYPE_flt: CMPVAL(fval);
+		case TYPE_dbl: CMPVAL(dval);
+	}
+	return 0;
 }
 
 void imps_sample()
@@ -970,9 +811,39 @@ imps_histogram(ValRecord *sample, int smp) {
 		}
 	}
 
-	STATS printf("sample gives %d unique values from %d and %d bins\n", smp, SAMPLE_SZ, bins);
+	VERBOSE printf("%s sample gives %d unique values from %d and %d bins\n", colname, smp, SAMPLE_SZ, bins);
 
 	return;
+}
+
+void
+stats()
+{
+	long i, j, tf, k;
+	int bits;
+	unsigned long mask;
+
+	for (i=0; i<bins; i++)
+		vectors[i]= histogram[i] = 0;
+
+	tf = 0;
+	for (i=0; i<imptop; i++) {
+		for (k=0; k < imprint[i].blks; k++) {
+			if (imprint[i].repeated == 1)
+				k = imprint[i].blks;
+			bits = 0;
+			mask = getMask(tf);
+			globalmask |= mask;
+			for (j=0; j<bins; j++) {
+				if (isSet(mask,j)) {
+					bits++;
+					histogram[j]++;
+				}
+			}
+			vectors[bits]++;
+			tf++;
+		}
+	}
 }
 
 void queries()
@@ -1008,7 +879,7 @@ void queries()
 	for (i = 0; i < REPETITION; i++) {
 		/* select a random range from the pool, leads to bias to skew data distribution */
 		/* use [slow,shigh) range expression */
-		genQueryRange(i, BITRANGE);
+		genQueryRange(i);
 
 		/* simple scan */
 		m   = 0;
@@ -1135,7 +1006,7 @@ void queries()
 					if (bitmask##B[tf] & mask) {								\
 						register T val;											\
 						l = n * rpp;											\
-						lim = l + rpp * imprint[j].blks;							\
+						lim = l + rpp * imprint[j].blks;						\
 						lim = lim > colcount ? colcount : lim;					\
 						if ((bitmask##B[tf] & ~innermask) == 0) {				\
 							for (; l < lim; l++) {								\
@@ -1193,11 +1064,12 @@ void queries()
 		fprintf(devnull, "m = %ld\n", m); /* to break compiler optimizations */
 	}
 
+
 	for (i =0; i< REPETITION; i++) {
-		printf("%s %s sorted %d select[%d] imprints %d zones %ld time %ld imprints %ld zone %ld tuples %ld %2.1f %%\n",
+		VERBOSE printf("%s %s sorted %d select[%d] imprints %d zones %ld time %ld imprints %ld zone %ld tuples %ld %2.1f %%\n",
 		       colname, typename, sorted, i, imptop, zonetop,
 		       basetimer[i],impstimer[i], zonetimer[i], tuples[i], tuples[i]* 100.0/colcount);
-		printf ("bindex %ld bcomparisons %ld zindex %ld zcomparisons %ld iindex %ld icomparisons %ld\n",
+		STATS printf ("bindex %ld bcomparisons %ld zindex %ld zcomparisons %ld iindex %ld icomparisons %ld\n",
 		       bindex[i], bcomparisons[i], zindex[i], zcomparisons[i], iindex[i], icomparisons[i]);
 
 		if (i) {
@@ -1207,4 +1079,91 @@ void queries()
 		}
 	}
 	free(oids);
+}
+
+/* simulate a series of queries */
+void genQueryRange(int i)
+{
+	long low, high;
+	int j;
+	int lastbit;
+
+	mask = 0;
+	innermask = 0;
+
+	/* select a range based on the actual non-empty bins */
+	for (lastbit = bins-1; lastbit >0; lastbit--)
+		if (isSet(globalmask, lastbit))
+			break;
+
+	low = 0 + (int)(rand() * 1.0 / RAND_MAX * lastbit);
+	high = low + i * lastbit/ (100.0/REPETITION);
+	if (high > lastbit)
+		high = lastbit;
+	if (low > high)
+		low = high;
+	
+	do {
+		/* find at least one non-empty bin */
+		for (j = low; j <= high; j++)
+			if ( histogram[j]) goto foundrange;
+		if ( low > 0){
+			low--;
+			high--;
+		} else {
+			high = lastbit + (high-low);
+			low= lastbit;
+		}
+	} while (1);
+
+foundrange:
+	for (; low < high; low++)
+		if (histogram[low]) break;
+
+	for (; high > low; high--)
+		if (histogram[high]) break;
+
+	for (j = low; j <= high; j++) {
+		mask = setBit(mask, j);
+	}
+	/* inner mask should only be set when range bounds call for it */
+	/* in this case we use full bins */
+	for (j = low+1; j <= high-1; j++) {
+		innermask = setBit(innermask, j);
+	}
+
+#define setqueryrange(X)						\
+	slow.X = mibins[low].X;						\
+	shigh.X = mxbins[high].X;					\
+	PRINT_QUERIES {								\
+		printf("query             ");			\
+		printMask(mask,BITS); putchar('\n');	\
+		printf("inner msk         ");			\
+		printMask(innermask,BITS);				\
+		putchar('\n');							\
+	}
+
+	switch (coltype) {
+	case TYPE_bte:
+		setqueryrange(bval);
+		break;
+	case TYPE_sht:
+		setqueryrange(sval);
+		break;
+	case TYPE_int:
+		setqueryrange(ival);
+		break;
+	case TYPE_lng:
+		setqueryrange(lval);
+		break;
+	case TYPE_oid:
+		setqueryrange(ulval);
+		break;
+	case TYPE_flt:
+		setqueryrange(fval);
+		break;
+	case TYPE_dbl:
+		setqueryrange(dval);
+	}
+	return;
 }
