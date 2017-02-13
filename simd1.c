@@ -68,7 +68,7 @@ int main(int argc,char** argv) {
 	int imprint_bits = atoi(argv[2]);
 	int n = 256 * atoi(argv[1]); // nicely divisible by 8 and 256
 	printf("Encoding %i values with %i bits\n", n, imprint_bits);
-	int* values       = malloc(sizeof(int) * n);
+	int* values       = aligned_alloc(32, sizeof(int) * n);
 	char* value_ptr   = (char*) values;
 	 __m256i*  restrict limits       = aligned_alloc(32, sizeof(__m256i) * imprint_bits);
 
@@ -98,7 +98,7 @@ int main(int argc,char** argv) {
 	start();
 	int chunk = -1;
 	printf("n=%i, blocks=%i\n", n, n/VALUES_PER_IMPRINT);
-	while (value_ptr < ((char*) values) + sizeof(int) * n) {
+	while (value_ptr < ((char*) values) + sizeof(int) * n - sizeof(__m256i)) {
 		__m256i imprintv = zero;
 		for (int chunk2 = 0; chunk2 < 32; chunk2++){
 			__m256i values_v    = _mm256_load_si256((__m256i*) value_ptr);
