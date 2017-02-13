@@ -702,7 +702,7 @@ Imprints_index* simd_imprints(int blocksize, int imprints_bins)
 							_mm256_cmpgt_##SIMDTYPE(values_v, limits[bin1]),			\
 							_mm256_cmpgt_##SIMDTYPE(values_v, limits[bin2])));			\
 		}																				\
-		result = _mm256_abs_epi32(result);//##SIMDTYPE(result);
+		result = _mm256_sub_##SIMDTYPE(zero,result);//##SIMDTYPE(result);
 
 #define GETBIT_SIMDD(SIMDTYPE) return NULL;
 #define GETBIT_SIMDF(SIMDTYPE) return NULL;
@@ -715,7 +715,7 @@ Imprints_index* simd_imprints(int blocksize, int imprints_bins)
 		__m256i simd_mask = zero;
 
 		for (b = 0; b < imps->blocksize && i < colcount; b += bsteps) {
-			__m256i values_v = _mm256_load_si256((__m256i*) col[i]);
+			__m256i values_v = _mm256_load_si256((__m256i*) (col+i*stride[coltype]));
 			__m256i result = zero;
 			switch (coltype) {
 				case TYPE_bte: GETBIT_SIMD(epi8); break;
@@ -737,7 +737,7 @@ Imprints_index* simd_imprints(int blocksize, int imprints_bins)
 		}
 
 		mask = _mm256_extract_epi64(simd_mask, imps->bins);
-		printMask(mask,64);
+		//printMask(mask, imps->bins); putchar('\n');
 	}
 
 	/* end creation, stop timer */
