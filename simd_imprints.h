@@ -9,8 +9,12 @@
 #include <unistd.h>
 #include <limits.h>
 #include <float.h>
+#include <ammintrin.h>
+#include <smmintrin.h>
+#include <immintrin.h>
 
 #define BITS      64
+#define SIMD_BITS 256
 #define MAX_IMPS  50000000
 #define SAMPLE_SZ 2048
 #define REPETITION  10   /* how many times to repeat each experiment to get an avg */

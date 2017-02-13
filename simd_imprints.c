@@ -24,6 +24,7 @@ int sorted;                                     /* column is sorted */
 /* timing variables */
 long zone_create_time;
 long imprints_create_time;
+long simd_imprints_create_time;
 
 /* zonemaps */
 typedef struct {
@@ -46,6 +47,19 @@ typedef struct {
 	unsigned int flgs:8 * sizeof(int) - MAXOFFSET-1; /* for future use, e.g. micro swaps */
 } Imprint;
 Imprint *imprint;
+
+/* a safer imprint struct */
+typedef struct {
+	Imprint *imprints;
+	void *bitmask;
+	int imptop;
+	int masktop;
+	int bins;
+	int blocksize;
+	int page;
+} Imprints_index;
+Imprints_index *simd_imprint;
+
 long *bitmask;
 long globalmask;
 int imptop;
@@ -76,6 +90,7 @@ void printBins();
 void printMask(long mask, int limit);
 void printImprint();
 void statistics();
+Imprints_index* simd_imprints(int blocksize, int imprint_bins);
 
 
 
@@ -142,7 +157,7 @@ int main(int argc, char **argv)
 		printf("empty open column file %s\n", filename);
 		return -1;
 	}
-	col = (char *) malloc(sizeof(col)*filesize);
+	col = (char *) aligned_alloc(32, sizeof(col)*filesize);
 	if (col == 0) {
 		printf("malloc failed %ld\n", filesize * sizeof(col));
 		return -1;
@@ -197,7 +212,8 @@ int main(int argc, char **argv)
 	zonemaps();
 	/*create imprints */
 	imprints();
-	/*TODO: create simd_imprints(); */
+	/*create simd_imprints() equal sized as the original imprint */
+	simd_imprints(rpp, bins);
 
 	VERBOSE printf("%s tuples=%ld size=%ld(bytes), zonemap_sz=%ld(bytes) %ld%% #zones=%ld, imprints_sz=%ld(bytes) %ld%%,",
 	             colname, colcount, filesize,
@@ -284,7 +300,6 @@ void zonemaps()
 	long t0;
 	int new = rpp-1; /*rpp is always power of 2*/
 
-	t0 = usec();
 	/* malloc zonemap array */
 	zmap = (Zonemap *) malloc (sizeof(Zonemap)*(pages+1));
 	memset((char*)zmap, 0, sizeof(Zonemap)*(pages+1));
@@ -297,6 +312,7 @@ void zonemaps()
 		if (zmap[zonetop].max.X < val.X) \
 			zmap[zonetop].max.X = val.X;
 
+	t0 = usec();
 	zonetop = -1;
 	for (i=0; i < colcount; i++) {
 		if (!(i&new)) {
@@ -345,6 +361,8 @@ void zonemaps()
 	if ((i-1)%rpp) zonetop++;
 	zonetop++;
 	zone_create_time = usec()-t0;
+
+	VERBOSE printf("%s zonemap  creation time=%ld, %ld usec per thousand values\n", colname,  zone_create_time, ((long)zone_create_time*1000)/colcount);
 }
 
 void
@@ -357,7 +375,6 @@ imprints()
 	int fits;
 	int new;
 
-	t0 = usec();
 
 	/* sample to create set the number of bins */
 	imps_sample();
@@ -387,6 +404,7 @@ do {									\
 		Z += ((val.X) >= mibins[_i].X);	\
 } while (0)
 
+	t0 = usec();
 	/* start creation */
 	for (i=0; i<colcount; i++) {
 		if (!(i&new) && i>0) {
@@ -465,7 +483,6 @@ do {									\
 	stats();
 
 	VERBOSE printf("%s imprints creation time=%ld, %ld usec per thousand values\n", colname, imprints_create_time, ((long)imprints_create_time*1000)/colcount);
-	VERBOSE printf("%s zonemap  creation time=%ld, %ld usec per thousand values\n", colname,  zone_create_time, ((long)zone_create_time*1000)/colcount);
 	PRINT_HISTO printHistogram(histogram, "Value distribution");
 	PRINT_IMPRINTS printImprint();
 
@@ -609,6 +626,128 @@ stats()
 			tf++;
 		}
 	}
+}
+
+__m256i setbit_256(__m256i x,int k){
+	// constants that will (hopefully) be hoisted out of a loop after inlining  
+	__m256i indices = _mm256_set_epi32(224,192,160,128,96,64,32,0);
+	__m256i one = _mm256_set1_epi32(-1);
+	one = _mm256_srli_epi32(one, 31);    // set1(0x1)
+	__m256i kvec = _mm256_set1_epi32(k);  
+	// if 0<=k<=255 then kvec-indices has exactly one element with a value between 0 and 31
+	__m256i shiftcounts = _mm256_sub_epi32(kvec, indices);
+	__m256i kbit        = _mm256_sllv_epi32(one, shiftcounts);   // shift counts outside 0..31 shift the bit out of the element
+	return _mm256_or_si256(kbit, x);                             // use _mm256_andnot_si256 to unset the k-th bit
+}
+
+
+Imprints_index* simd_imprints(int blocksize, int imprints_bins)
+{
+	Imprints_index *imps;
+	int bsteps;
+	long i, b;
+
+	/* simd stuff */
+	__m256i *simd_bitmasks;
+	__m256i zero;
+	__m256i bitmasks[256];
+	__m256i *restrict limits;
+
+	int mask;
+	long t0;
+
+
+	imps = (Imprints_index *) malloc (sizeof(Imprints_index));
+	imps->blocksize = blocksize;  /* blocksize is values per block */
+	imps->bins = imprints_bins;   /* aka how many bits per imprint */
+	imps->page = colcount/blocksize + 1; /* aka how many imprints we will need worst case */
+	imps->imprints = (Imprint *) malloc (sizeof(Imprint) * imps->page);
+	imps->imptop = 0;
+	imps->masktop = 0;
+
+
+	imps->bitmask = (void *) malloc (pages * (imps->bins/8));
+	simd_bitmasks = (__m256i *) imps->bitmask;
+	limits = aligned_alloc(32, imps->bins*sizeof(__m256i));
+
+#define MAKE_LIMITS(SIMDTYPE, X)											\
+	for (int _i = 0; _i < imps->bins; _i++)								\
+		limits[_i] = _mm256_set1_##SIMDTYPE(mibins[_i].X);				\
+
+	switch (coltype) {
+		case TYPE_bte: MAKE_LIMITS(epi8, bval); break;
+		case TYPE_sht: MAKE_LIMITS(epi16, sval); break;
+		case TYPE_int: MAKE_LIMITS(epi32, ival); break;
+		case TYPE_lng: MAKE_LIMITS(epi64x, lval); break;
+		case TYPE_oid: MAKE_LIMITS(epi64x, ulval); break;
+		case TYPE_flt: MAKE_LIMITS(ps, fval); break;
+		case TYPE_dbl: MAKE_LIMITS(pd, dval); break;
+		default: return NULL;
+	}
+
+	/* zero simd value */
+	zero = _mm256_setzero_si256();
+	/* simd bitmasks */
+	for (int i = 0; i < 256; i++) {
+		bitmasks[i] = setbit_256(zero, i);
+	}
+
+
+
+#define GETBIT_SIMD(SIMDTYPE)															\
+	/* perform 2 bin comparisons per simd instruction until all bins are checked */		\
+		for (int bin1 = 0, bin2 = 1; bin1 < imps->bins-2; bin1+=2, bin2+=2) {			\
+			result = _mm256_add_##SIMDTYPE(result,										\
+						_mm256_add_##SIMDTYPE(											\
+							_mm256_cmpgt_##SIMDTYPE(values_v, limits[bin1]),			\
+							_mm256_cmpgt_##SIMDTYPE(values_v, limits[bin2])));			\
+		}																				\
+		result = _mm256_abs_epi32(result);//##SIMDTYPE(result);
+
+#define GETBIT_SIMDD(SIMDTYPE) return NULL;
+#define GETBIT_SIMDF(SIMDTYPE) return NULL;
+
+	bsteps = 256 / (stride[coltype]*8);
+
+	t0 = usec();
+	/* start creation */
+	for (i = 0; i < colcount;) {
+		__m256i simd_mask = zero;
+
+		for (b = 0; b < imps->blocksize && i < colcount; b += bsteps) {
+			__m256i values_v = _mm256_load_si256((__m256i*) col[i]);
+			__m256i result = zero;
+			switch (coltype) {
+				case TYPE_bte: GETBIT_SIMD(epi8); break;
+				case TYPE_sht: GETBIT_SIMD(epi16); break;
+				case TYPE_int: GETBIT_SIMD(epi32); break;
+				case TYPE_lng: GETBIT_SIMD(epi64); break;
+				case TYPE_oid: GETBIT_SIMD(epi64); break;
+				case TYPE_flt: GETBIT_SIMDF(ps); break;
+				case TYPE_dbl: GETBIT_SIMDD(pd); break;
+				default: return NULL;;
+			}
+			i += bsteps;
+
+			for (int i1 = 0, i2=1; i1 < bsteps-1; i1+=2, i2+=2) {
+				simd_mask = _mm256_or_si256(
+					_mm256_or_si256(simd_mask, bitmasks[_mm256_extract_epi32(result, i1)]),
+					_mm256_or_si256(simd_mask, bitmasks[_mm256_extract_epi32(result, i2)]));
+			}
+		}
+
+		mask = _mm256_extract_epi64(simd_mask, imps->bins);
+		printMask(mask,64);
+	}
+
+	/* end creation, stop timer */
+	simd_imprints_create_time = usec() - t0;
+
+
+	VERBOSE printf("%s simd_imprints creation time=%ld, %ld usec per thousand values\n", colname, simd_imprints_create_time, ((long)simd_imprints_create_time*1000)/colcount);
+
+	return imps;
+
 }
 
 void queries()
