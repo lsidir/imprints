@@ -70,10 +70,10 @@ int main(int argc,char** argv) {
 	printf("Encoding %i values with %i bits\n", n, imprint_bits);
 	int* values       = malloc(sizeof(int) * n);
 	char* value_ptr   = (char*) values;
-	 __m256i*  restrict limits       = malloc(sizeof(__m256i) * imprint_bits);
+	 __m256i*  restrict limits       = aligned_alloc(32, sizeof(__m256i) * imprint_bits);
 
 	// TODO: we should probably dynamically grow these?
-	__m256i* imprint_values = malloc(sizeof(__m256i) * n/VALUES_PER_IMPRINT);
+	__m256i* imprint_values = aligned_alloc(32, sizeof(__m256i) * n/VALUES_PER_IMPRINT);
 	int*     imprint_counts = calloc(sizeof(int) * n/VALUES_PER_IMPRINT, 1);
 
 	if (!values || !limits || !imprint_values || !imprint_counts) {
