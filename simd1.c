@@ -46,6 +46,8 @@ __m256i setbit_256(__m256i x,int k){
 
 #define VALUE_BITS 32
 
+#define REGLEN 256
+
 static struct timeval tm1;
 
 static inline void start()
@@ -65,7 +67,7 @@ static inline size_t stop()
 
 int main(int argc,char** argv) {
 	int imprint_bits = atoi(argv[2]);
-	int n = 256 * atoi(argv[1]); // nicely divisible by 8 and 256
+	int n = REGLEN * atoi(argv[1]); // nicely divisible by 8 and 256
 	printf("Encoding %i values with %i bits\n", n, imprint_bits);
 	int* values       = aligned_alloc(32, sizeof(int) * n);
 	char* value_ptr   = (char*) values;
@@ -100,7 +102,7 @@ int main(int argc,char** argv) {
 	while (value_ptr < ((char*) values) + sizeof(int) * n) {
 		__m256i imprintv = zero;
 		for (int chunk2 = 0; chunk2 < 32; chunk2++){
-			__m256i values_v    = _mm256_load_si256((__m256i*) value_ptr);
+			__m256i values_v    = *((__m256i*) value_ptr);
 			__m256i result      = zero;
 
 			// doing two limits at once was faster than a single one, but it made no difference between two and eight
