@@ -62,13 +62,6 @@ ValRecord slow, shigh;
 unsigned long mask;
 unsigned long innermask;
 
-int bitcover(long histo[BITS]){
-	int i, c=0;
-	for( i = 0; i< bins; i++)
-		c += histo[i]>0;
-	return c;
-}
-
 /* functions (in call order)-ish */
 void isSorted();
 void zonemaps();
@@ -78,238 +71,13 @@ void imps_histogram(ValRecord *sample, int smp);
 void stats();
 void queries();
 void genQueryRange(int i);
+void printHistogram(long histo[BITS], char *name);
+void printBins();
+void printMask(long mask, int limit);
+void printImprint();
+void statistics();
 
 
-/* show the distribution graphically */
-void printHistogram(long histo[BITS], char *name)
-{
-	int i,n;
-	double m = 0;
-
-	for (i=0;i<bins; i++)
-		if ( histo[i] > m) m = histo[i];
-
-	m /= 10.0;
-	for ( n= 9; n >= 0; n --){
-		printf("                 ");
-		for(i =0; i< bins ; i++)
-		printf("%c", histo[i] > n * m?'H':' ');
-		printf("\n");
-	}
-}
-
-void printBins()
-{
-	int j;
-	printf("%s bins ", colname);
-	for ( j=0; j<bins; j++)
-		switch(coltype){
-		case TYPE_bte:
-			printf(" %7d:%d ", mibins[j].bval, mxbins[j].bval);
-			break;
-		case TYPE_sht:
-			printf(" %7d:%d ", mibins[j].sval, mxbins[j].sval);
-			break;
-		case TYPE_int:
-			printf(" %7d:%d ", mibins[j].ival, mxbins[j].ival);
-			break;
-		case TYPE_lng:
-			printf(" %7ld:%ld ", mibins[j].lval, mxbins[j].lval);
-			break;
-		case TYPE_oid:
-			printf(" %7lu:%lu ", mibins[j].ulval, mxbins[j].ulval);
-			break;
-		case TYPE_flt:
-			printf(" %9.8f:%0.8f ", mibins[j].fval, mxbins[j].fval);
-			break;
-		case TYPE_dbl:
-			printf(" %9.8g:%9.8g", mibins[j].dval,  mxbins[j].dval);
-		}
-	printf("\n");
-}
-
-void printMask(long mask,int limit)
-{
-	int j, cells =0;
-	for ( j =0; j<limit; j++)
-		printf("%c", isSet(mask,j)?'x':'.');
-}
-
-void printImprint()
-{
-	int i,j, lzone, blks = 0,tf = 0;
-	unsigned long mask;
-	ValRecord mx,mi;
-	int unique = 0;
-
-	printf("%s rpp=%d imprint cells %d zone cells %ld \n", colname, rpp, imptop, zonetop);
-	printf("                 ");
-	for ( j =0; j< bins; j++)
-		printf("%c", j% 10 == 0?'0'+ j/10:'.');
-	printf("\n");
-
-#define findrange(X) \
-	for ( j= lzone+1; j < blks; j++) { \
-		if ( zmap[j].min.X < mi.X) \
-			mi.X = zmap[j].min.X; \
-		if ( zmap[j].max.X > mx.X) \
-			mx.X = zmap[j].max.X; \
-	}
-
-	for ( i=0; i< imptop; i++) {
-		if (imprint[i].repeated == 0) {
-			for (j=0; j<imprint[i].blks;j++) {
-				mi = zmap[blks].min;
-				mx = zmap[blks].max;
-				blks ++;
-				lzone = blks;
-				printf("[ %10d ]   ", blks);
-				mask = getMask(tf);
-				printMask(mask,bins);
-				tf++;
-				switch(coltype){
-					case TYPE_bte:
-						printf(" %7d : %d\n", mi.bval,  mx.bval);
-					break;
-					case TYPE_sht:
-						printf(" %7d : %d\n", mi.sval,  mx.sval);
-					break;
-					case TYPE_int:
-						printf(" %7d : %d\n", mi.ival,  mx.ival);
-					break;
-					case TYPE_lng:
-						printf(" %7ld : %ld\n", mi.lval,  mx.lval);
-					break;
-					case TYPE_oid:
-						printf(" %7lu : %lu\n", mi.ulval,  mx.ulval);
-					break;
-					case TYPE_flt:
-						printf(" %9.8f : %9.8f\n", mi.fval,  mx.fval);
-					break;
-					case TYPE_dbl:
-					printf(" %9.8f : %9.8f\n", mi.dval,  mx.dval);
-				}
-			}
-		} else { /* same imprint for imprint[i].blks next blocks */
-			unique++;
-			lzone = blks;
-			mi = zmap[lzone].min;
-			mx = zmap[lzone].max;
-			blks += imprint[i].blks;
-			printf("[ %10d ]+  ", blks);
-			mask = getMask(tf);
-			printMask(mask,bins);
-			tf++;
-			switch(coltype){
-			case TYPE_bte:
-				findrange(bval);
-				printf(" %7d : %d\n", mi.bval,  mx.bval);
-				break;
-			case TYPE_sht:
-				findrange(sval);
-				printf(" %7d : %d\n", mi.sval,  mx.sval);
-				break;
-			case TYPE_int:
-				findrange(ival);
-				printf(" %7d : %d\n", mi.ival,  mx.ival);
-				break;
-			case TYPE_lng:
-				findrange(lval);
-				printf(" %7ld : %ld\n", mi.lval,  mx.lval);
-				break;
-			case TYPE_oid:
-				findrange(ulval);
-				printf(" %7lu : %lu\n", mi.ulval,  mx.ulval);
-				break;
-			case TYPE_flt:
-				findrange(fval);
-				printf(" %9.8f : %9.8f\n", mi.fval,  mx.fval);
-				break;
-			case TYPE_dbl:
-				findrange(dval);
-				printf(" %9.8f : %9.8f\n", mi.dval,  mx.dval);
-			}
-		}
-	}
-	printBins();
-
-	printf("%s histogram summary ", colname);
-	i = 0;
-	for ( j=0; j< bins; j++)
-	if ( histogram[j] == 0)  i++;
-		printf(" %d empty cells, bits used %d",i,bins-i);
-	printf("\n%s histogram", colname);
-	for ( j=0; j< bins; j++)
-	if( histogram[j])
-		printf("[%d] %ld ", j, histogram[j]);
-	i=0;
-	for ( j=0; j< bins; j++)
-		 i += isSet(globalmask,j);
-	printf("\n%s vectors imptop %d masktop %d unique %d bits %d ", colname, imptop, masktop, unique, i);
-	for ( j=0; j<= bins; j++)
-		if(vectors[j])
-			printf("[%d] %ld ", j, vectors[j]);
-	printf("\n");
-}
-
-/* calculate the statistics of the bits in the imprints */
-/* calculate the spread of bits over the mask. It determines the filter capability for ranges */
-/* calculate the number of bits per mask to determine single bin occupancy */
-void
-statistics()
-{
-	double var = 0, bitvar = 0;
-	double delta = 0, bitdelta = 0;
-	double mean = 0, bitmean = 0;
-	double c;
-	long d;
-	long edit, on;
-	unsigned long mask;
-	int bitcnt, i, j, first, last;
-
-	assert(globalmask);
-	assert(masktop);
-	for( i= 0; i< masktop; i++){
-		first= -1;
-		bitcnt = 0;
-		mask = getMask(i);
-		for( j=0; j< bins; j++)
-		if( isSet(mask,j)  && isSet(globalmask,j)){
-			if ( first == -1) first= j;
-			last = j;
-			bitcnt++;	/* number of bits set */
-		}
-		/* compensate for the rpp */
-		assert(first != -1);
-		c= (last-first+1.0);
-		delta = c-mean;
-		mean += c;
-		var += (delta*(c - mean/(i+1)));
-
-		bitmean += bitcnt;
-		bitdelta += bitcnt-bitmean;
-		bitvar += (bitdelta*(bitcnt - bitmean/(i+1)));
-	}
-	mean /= i;
-	bitmean /= i;
-	printf("%s bit spread average %5.3f deviation %5.3f bit density average %5.3f dev %5.3f total %d bits rpp %d\n", 
-		colname, mean, sqrt(var/masktop), bitmean, sqrt(bitvar/masktop), bins, rpp);
-
-	/* edit distance */
-	edit = 0; on = 0;
-	for (i=0; i< masktop; i++) {
-		mask = getMask(i);
-		for (j=0; j<bins; j++)
-			if (isSet(mask,j)) on++;
-		if (i > 0) {
-			mask = mask ^ getMask(i-1);
-			for (j=0; j<bins; j++)
-				if (isSet(mask,j)) edit++;
-		}
-	}
-	printf("%s total bits on %ld total edit distance %ld entropy is %lf\n", 
-		colname, on, edit, (double)edit/(double)(2*on));
-}
 
 /* main function for stand alone imprints */
 int main(int argc, char **argv)
@@ -1166,3 +934,238 @@ foundrange:
 	}
 	return;
 }
+
+/*****************************
+ * Printing Functions        *
+ * ***************************/
+
+
+/* show the distribution graphically */
+void printHistogram(long histo[BITS], char *name)
+{
+	int i, n;
+	double m = 0;
+
+	for (i = 0; i < bins; i++)
+		if (histo[i] > m)
+			m = histo[i];
+
+	m /= 10.0;
+	for (n = 9; n >= 0; n--) {
+		printf("                 ");
+		for (i = 0; i < bins; i++)
+			printf("%c", histo[i] > n * m?'H':' ');
+		printf("\n");
+	}
+}
+
+void printBins()
+{
+	int j;
+	printf("%s bins ", colname);
+	for ( j=0; j<bins; j++)
+		switch(coltype){
+		case TYPE_bte:
+			printf(" %7d:%d ", mibins[j].bval, mxbins[j].bval);
+			break;
+		case TYPE_sht:
+			printf(" %7d:%d ", mibins[j].sval, mxbins[j].sval);
+			break;
+		case TYPE_int:
+			printf(" %7d:%d ", mibins[j].ival, mxbins[j].ival);
+			break;
+		case TYPE_lng:
+			printf(" %7ld:%ld ", mibins[j].lval, mxbins[j].lval);
+			break;
+		case TYPE_oid:
+			printf(" %7lu:%lu ", mibins[j].ulval, mxbins[j].ulval);
+			break;
+		case TYPE_flt:
+			printf(" %9.8f:%0.8f ", mibins[j].fval, mxbins[j].fval);
+			break;
+		case TYPE_dbl:
+			printf(" %9.8g:%9.8g", mibins[j].dval,  mxbins[j].dval);
+		}
+	printf("\n");
+}
+
+void printMask(long mask, int limit)
+{
+	int j, cells =0;
+	for ( j =0; j<limit; j++)
+		printf("%c", isSet(mask,j)?'x':'.');
+}
+
+void printImprint()
+{
+	int i,j, lzone, blks = 0,tf = 0;
+	unsigned long mask;
+	ValRecord mx,mi;
+	int unique = 0;
+
+	printf("%s rpp=%d imprint cells %d zone cells %ld \n", colname, rpp, imptop, zonetop);
+	printf("                 ");
+	for ( j =0; j< bins; j++)
+		printf("%c", j% 10 == 0?'0'+ j/10:'.');
+	printf("\n");
+
+#define findrange(X) \
+	for ( j= lzone+1; j < blks; j++) { \
+		if ( zmap[j].min.X < mi.X) \
+			mi.X = zmap[j].min.X; \
+		if ( zmap[j].max.X > mx.X) \
+			mx.X = zmap[j].max.X; \
+	}
+
+	for ( i=0; i< imptop; i++) {
+		if (imprint[i].repeated == 0) {
+			for (j=0; j<imprint[i].blks;j++) {
+				mi = zmap[blks].min;
+				mx = zmap[blks].max;
+				blks ++;
+				lzone = blks;
+				printf("[ %10d ]   ", blks);
+				mask = getMask(tf);
+				printMask(mask,bins);
+				tf++;
+				switch(coltype){
+					case TYPE_bte:
+						printf(" %7d : %d\n", mi.bval,  mx.bval);
+					break;
+					case TYPE_sht:
+						printf(" %7d : %d\n", mi.sval,  mx.sval);
+					break;
+					case TYPE_int:
+						printf(" %7d : %d\n", mi.ival,  mx.ival);
+					break;
+					case TYPE_lng:
+						printf(" %7ld : %ld\n", mi.lval,  mx.lval);
+					break;
+					case TYPE_oid:
+						printf(" %7lu : %lu\n", mi.ulval,  mx.ulval);
+					break;
+					case TYPE_flt:
+						printf(" %9.8f : %9.8f\n", mi.fval,  mx.fval);
+					break;
+					case TYPE_dbl:
+					printf(" %9.8f : %9.8f\n", mi.dval,  mx.dval);
+				}
+			}
+		} else { /* same imprint for imprint[i].blks next blocks */
+			unique++;
+			lzone = blks;
+			mi = zmap[lzone].min;
+			mx = zmap[lzone].max;
+			blks += imprint[i].blks;
+			printf("[ %10d ]+  ", blks);
+			mask = getMask(tf);
+			printMask(mask,bins);
+			tf++;
+			switch(coltype){
+			case TYPE_bte:
+				findrange(bval);
+				printf(" %7d : %d\n", mi.bval,  mx.bval);
+				break;
+			case TYPE_sht:
+				findrange(sval);
+				printf(" %7d : %d\n", mi.sval,  mx.sval);
+				break;
+			case TYPE_int:
+				findrange(ival);
+				printf(" %7d : %d\n", mi.ival,  mx.ival);
+				break;
+			case TYPE_lng:
+				findrange(lval);
+				printf(" %7ld : %ld\n", mi.lval,  mx.lval);
+				break;
+			case TYPE_oid:
+				findrange(ulval);
+				printf(" %7lu : %lu\n", mi.ulval,  mx.ulval);
+				break;
+			case TYPE_flt:
+				findrange(fval);
+				printf(" %9.8f : %9.8f\n", mi.fval,  mx.fval);
+				break;
+			case TYPE_dbl:
+				findrange(dval);
+				printf(" %9.8f : %9.8f\n", mi.dval,  mx.dval);
+			}
+		}
+	}
+	printBins();
+
+	printf("%s histogram summary ", colname);
+	i = 0;
+	for ( j=0; j< bins; j++)
+	if ( histogram[j] == 0)  i++;
+		printf(" %d empty cells, bits used %d",i,bins-i);
+	printf("\n%s histogram", colname);
+	for ( j=0; j< bins; j++)
+	if( histogram[j])
+		printf("[%d] %ld ", j, histogram[j]);
+	i=0;
+	for ( j=0; j< bins; j++)
+		 i += isSet(globalmask,j);
+	printf("\n%s vectors imptop %d masktop %d unique %d bits %d ", colname, imptop, masktop, unique, i);
+	for ( j=0; j<= bins; j++)
+		if(vectors[j])
+			printf("[%d] %ld ", j, vectors[j]);
+	printf("\n");
+}
+
+void statistics()
+{
+	double var = 0, bitvar = 0;
+	double delta = 0, bitdelta = 0;
+	double mean = 0, bitmean = 0;
+	double c;
+	long d;
+	long edit, on;
+	unsigned long mask;
+	int bitcnt, i, j, first, last;
+
+	assert(globalmask);
+	assert(masktop);
+	for( i= 0; i< masktop; i++){
+		first= -1;
+		bitcnt = 0;
+		mask = getMask(i);
+		for( j=0; j< bins; j++)
+		if( isSet(mask,j)  && isSet(globalmask,j)){
+			if ( first == -1) first= j;
+			last = j;
+			bitcnt++;	/* number of bits set */
+		}
+		/* compensate for the rpp */
+		assert(first != -1);
+		c= (last-first+1.0);
+		delta = c-mean;
+		mean += c;
+		var += (delta*(c - mean/(i+1)));
+
+		bitmean += bitcnt;
+		bitdelta += bitcnt-bitmean;
+		bitvar += (bitdelta*(bitcnt - bitmean/(i+1)));
+	}
+	mean /= i;
+	bitmean /= i;
+	printf("%s bit spread average %5.3f deviation %5.3f bit density average %5.3f dev %5.3f total %d bits rpp %d\n", 
+		colname, mean, sqrt(var/masktop), bitmean, sqrt(bitvar/masktop), bins, rpp);
+
+	/* edit distance */
+	edit = 0; on = 0;
+	for (i=0; i< masktop; i++) {
+		mask = getMask(i);
+		for (j=0; j<bins; j++)
+			if (isSet(mask,j)) on++;
+		if (i > 0) {
+			mask = mask ^ getMask(i-1);
+			for (j=0; j<bins; j++)
+				if (isSet(mask,j)) edit++;
+		}
+	}
+	printf("%s total bits on %ld total edit distance %ld entropy is %lf\n", 
+		colname, on, edit, (double)edit/(double)(2*on));
+}
+
+
