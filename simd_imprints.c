@@ -86,9 +86,6 @@ int main(int argc, char **argv)
 	long filesize;
 	size_t rd;
 
-	long oid, n;
-
-
 	if (argc != 5) {
 		printf("usage: %s type count file column\n", argv[0]);
 		return -1;
@@ -355,7 +352,7 @@ imprints()
 {
 	long i, mask, prevmask;
 	long t0;
-	int j, bit;
+	int bit;
 	ValRecord val;
 	int fits;
 	int new;
@@ -624,9 +621,6 @@ void queries()
 	long bindex[REPETITION],       zindex[REPETITION],       iindex[REPETITION];
 	long bcomparisons[REPETITION], zcomparisons[REPETITION], icomparisons[REPETITION];
 	int i;
-
-
-	long low = 0, high = 0, total;
 
 	unsigned char  *bitmask8  = (unsigned char *) bitmask;
 	unsigned short *bitmask16 = (unsigned short *)bitmask;
@@ -991,7 +985,7 @@ void printBins()
 
 void printMask(long mask, int limit)
 {
-	int j, cells =0;
+	int j;
 	for ( j =0; j<limit; j++)
 		printf("%c", isSet(mask,j)?'x':'.');
 }
@@ -1119,7 +1113,6 @@ void statistics()
 	double delta = 0, bitdelta = 0;
 	double mean = 0, bitmean = 0;
 	double c;
-	long d;
 	long edit, on;
 	unsigned long mask;
 	int bitcnt, i, j, first, last;
