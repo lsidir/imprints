@@ -179,7 +179,7 @@ int main(int argc, char **argv)
 	             "type %s %d "
 	             "stride %d "
 	             "records %ld "
-	             "pagesize %ld "
+	             "pagesize %d "
 	             "sysconf(pagesize) %ld "
 	             "rpp %d "
 	             "pages %ld\n",
