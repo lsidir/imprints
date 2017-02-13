@@ -57,8 +57,7 @@ static inline size_t stop()
 {
     struct timeval tm2;
     gettimeofday(&tm2, NULL);
-
-    size_t t = 1000 * (tm2.tv_sec - tm1.tv_sec) + (tm2.tv_usec - tm1.tv_usec) / 1000;
+	size_t t = 1000000 * (tm2.tv_sec - tm1.tv_sec) + (tm2.tv_usec - tm1.tv_usec);
     printf("%lu ms runtime \n", t);
     return t;
 }
@@ -98,7 +97,7 @@ int main(int argc,char** argv) {
 	start();
 	int chunk = -1;
 	printf("n=%i, blocks=%i\n", n, n/VALUES_PER_IMPRINT);
-	while (value_ptr < ((char*) values) + sizeof(int) * n - sizeof(__m256i)) {
+	while (value_ptr < ((char*) values) + sizeof(int) * n) {
 		__m256i imprintv = zero;
 		for (int chunk2 = 0; chunk2 < 32; chunk2++){
 			__m256i values_v    = _mm256_load_si256((__m256i*) value_ptr);
@@ -132,14 +131,14 @@ int main(int argc,char** argv) {
 
 	}
 	// TODO: we do not know at this point whether chunk points to the last or the n+1 element
-	size_t ms = stop();
+	size_t usec = stop();
 
 	for (int ci = 0 ; ci <= chunk; ci++) {
 		printf("%5i %10i ", ci, imprint_counts[ci]);
 		printBits(sizeof(__m256i), &imprint_values[ci]);
 
 	}
-	printf("%i imprint(s), %i Bytes, %f values per cycle\n", chunk, chunk*256/8, (n/ms)/3000000.0);
+	printf("%i imprint(s), %i Bytes, %lu us, %f usec per 1k values\n", chunk, chunk*256/8, usec, usec*1000/(n*1.0));
 
 
 /*

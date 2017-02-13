@@ -1,3 +1,2 @@
 #!/bin/sh
-clang simd1.c -march=native -Wall -O3 -g && ./a.out 3000000 256
-
+clang simd1.c -march=native -Wall  -g -O3 && ./a.out 1000000 256
