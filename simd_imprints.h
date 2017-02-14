@@ -74,3 +74,36 @@ typedef struct {
 	ValRecord     min;				/* min value in col				*/
 	ValRecord     max;				/* max value in col				*/
 } Column;
+
+/* The Column Imprints contains a binned imprint bitvector
+ * to weed out blocks of no interest in a scan.
+ * The imprint vectors are simply compressed, keeping track on
+ * the number of blocks each imprint covers. From the blks we can
+ * calculate the actual oid ranges, provided we scan only.
+ */
+#define MAXOFFSET 24
+typedef struct {
+	unsigned int   blks:MAXOFFSET;	/* blocks count						*/
+	unsigned int   repeated:1;		/* same or unique imprints in blks	*/
+	unsigned int   flgs:8 * sizeof(int) - MAXOFFSET-1; /* for future use	*/
+} Dct;
+
+typedef struct {
+	Dct            *dct;		/* the dictionary structure				*/
+	char           *imprints;	/* the imprint vectors					*/
+	unsigned long  dct_cnt;		/* count of dictionary entries			*/
+	unsigned long  imps_cnt;	/* count of imprint vector entries		*/
+	int            bins;		/* number of bins						*/
+	int            blocksize;	/* number of values covered per block	*/
+} Imprints_index;
+
+/* Zonemaps */
+typedef struct {
+	ValRecord min;
+	ValRecord max;
+} Zonemap;
+
+typedef struct {
+	Zonemap *zmaps;
+	unsigned long zmaps_cnt;
+} Zonemap_index;

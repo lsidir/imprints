@@ -14,37 +14,6 @@ long zone_create_time;
 long imprints_create_time;
 long simd_imprints_create_time;
 
-/* zonemaps */
-typedef struct {
-	ValRecord min;
-	ValRecord max;
-} Zonemap;
-Zonemap *zmap;
-long zonetop;
-
-/* The Column Imprints contains a binned imprint bitvector
- * to weed out blocks of no interest in a scan.
- * The imprint vectors are simply compressed, keeping track on
- * the number of blocks each imprint covers. From the blks we can
- * calculate the actual oid ranges, provided we scan only.
- */
-#define MAXOFFSET 24
-typedef struct {
-	unsigned int blks:MAXOFFSET;	/* blocks count						*/
-	unsigned int repeated:1;		/* same or unique imprints in blks	*/
-	unsigned int flgs:8 * sizeof(int) - MAXOFFSET-1; /* for future use	*/
-} Dct;
-
-typedef struct {
-	Dct *dct;		/* the dictionary structure				*/
-	long *imprints;	/* the imprint vectors					*/
-	long dct_cnt;	/* count of dictionary entries			*/
-	long imps_cnt;	/* count of imprint vector entries		*/
-	int bins;		/* number of bins						*/
-	int blocksize;	/* number of values covered per block	*/
-} Imprints_index;
-
-
 /*****************/
 long globalmask;
 Dct *dct_scalar;
@@ -65,17 +34,17 @@ unsigned long innermask;
 
 /* functions (in call order)-ish */
 void isSorted(Column column);
-void zonemaps(Column column);
+Zonemap_index *create_zonemaps(Column column);
 void scalar_imprints(Column column);
 void imps_sample(Column column);
 void imps_histogram(Column column, ValRecord *sample, int smp);
 void stats();
-void queries(Column column);
+void queries(Column column, Zonemap_index *zonemaps);
 void genQueryRange(Column column, int i);
 void printHistogram(long histo[BITS], char *name);
 void printBins(Column column);
 void printMask(long mask, int limit);
-void printImprint(Column column);
+void printImprint(Column column, Zonemap_index *zonemaps);
 void statistics();
 Imprints_index* simd_imprints(Column column, int blocksize, int imprint_bins);
 
@@ -88,6 +57,7 @@ int main(int argc, char **argv)
 	FILE *cfile;
 	long filesize;
 	size_t rd;
+	Zonemap_index *zonemaps;
 	Imprints_index *simd_imps_orig;
 
 	if (argc != 5) {
@@ -198,21 +168,22 @@ int main(int argc, char **argv)
 	isSorted(column);
 
 	/* create zonemaps */
-	zonemaps(column);
+	zonemaps = create_zonemaps(column);
 	/*create imprints */
 	scalar_imprints(column);
+	PRINT_IMPRINTS printImprint(column, zonemaps);
 	/*create simd_imprints() equal sized as the original imprint */
 	simd_imps_orig = simd_imprints(column, rpp, bins);
 
 	VERBOSE printf("%s tuples=%ld size=%ld(bytes), zonemap_sz=%ld(bytes) %ld%% #zones=%ld, imprints_sz=%ld(bytes) %ld%%,",
 	             column.colname, column.colcount, filesize,
-	             zonetop * 2 * stride[column.coltype], ((long)zonetop * 2 * stride[column.coltype] * 100) / filesize, zonetop,
+	             zonemaps->zmaps_cnt * 2 * stride[column.coltype], ((long)zonemaps->zmaps_cnt * 2 * stride[column.coltype] * 100) / filesize, zonemaps->zmaps_cnt,
 	             ((long) (imps_cnt / (BITS/bins)) * sizeof(long) + dct_cnt * sizeof(Dct)),
 	             100 * ((long) (imps_cnt / (BITS/bins)) * sizeof(long) + dct_cnt * sizeof(Dct)) / filesize);
 	VERBOSE printf(" #imprints=%ld #dict=%ld\n", imps_cnt, dct_cnt);
 
 	/* run queries */
-	queries(column);
+	queries(column, zonemaps);
 	statistics(column);
 
 
@@ -222,7 +193,8 @@ int main(int argc, char **argv)
 	free(column.col);
 	free(dct_scalar);
 	free(imprints);
-	free(zmap);
+	free(zonemaps->zmaps);
+	free(zonemaps);
 	return 1;
 }
 
@@ -282,58 +254,61 @@ long usec()
 	return (long) tp.tv_sec * 1000000 + (long) tp.tv_usec;
 }
 
-void zonemaps(Column column)
+Zonemap_index *
+create_zonemaps(Column column)
 {
+	Zonemap_index *zonemaps;
 	ValRecord val;
 	long i;
 	long t0;
 	int new = rpp-1; /*rpp is always power of 2*/
 
 	/* malloc zonemap array */
-	zmap = (Zonemap *) malloc (sizeof(Zonemap)*(pages+1));
-	memset((char*)zmap, 0, sizeof(Zonemap)*(pages+1));
+	zonemaps = (Zonemap_index *) malloc(sizeof(Zonemap_index));
+	zonemaps->zmaps = (Zonemap *) malloc (sizeof(Zonemap)*(pages+1));
+	memset((char *)zonemaps->zmaps, 0, sizeof(Zonemap)*(pages+1));
 
 #define upd(X) \
 		if (val.X < column.min.X) column.min.X = val.X; \
 		if (val.X > column.max.X) column.max.X = val.X; \
-		if (zmap[zonetop].min.X > val.X) \
-			zmap[zonetop].min.X = val.X; \
-		if (zmap[zonetop].max.X < val.X) \
-			zmap[zonetop].max.X = val.X;
+		if (zonemaps->zmaps[zonemaps->zmaps_cnt].min.X > val.X) \
+			zonemaps->zmaps[zonemaps->zmaps_cnt].min.X = val.X; \
+		if (zonemaps->zmaps[zonemaps->zmaps_cnt].max.X < val.X) \
+			zonemaps->zmaps[zonemaps->zmaps_cnt].max.X = val.X;
 
 	t0 = usec();
-	zonetop = -1;
+	zonemaps->zmaps_cnt = -1;
 	for (i=0; i < column.colcount; i++) {
 		if (!(i&new)) {
-			zonetop++;
+			zonemaps->zmaps_cnt++;
 			switch (column.coltype) {
 			case TYPE_bte:
-				zmap[zonetop].min.bval = 127;
-				zmap[zonetop].max.bval = -127;
+				zonemaps->zmaps[zonemaps->zmaps_cnt].min.bval = 127;
+				zonemaps->zmaps[zonemaps->zmaps_cnt].max.bval = -127;
 				break;
 			case TYPE_sht:
-				zmap[zonetop].min.sval = 32767;
-				zmap[zonetop].max.sval = -32767;
+				zonemaps->zmaps[zonemaps->zmaps_cnt].min.sval = 32767;
+				zonemaps->zmaps[zonemaps->zmaps_cnt].max.sval = -32767;
 				break;
 			case TYPE_int:
-				zmap[zonetop].min.ival = INT_MAX;
-				zmap[zonetop].max.ival = INT_MIN;
+				zonemaps->zmaps[zonemaps->zmaps_cnt].min.ival = INT_MAX;
+				zonemaps->zmaps[zonemaps->zmaps_cnt].max.ival = INT_MIN;
 				break;
 			case TYPE_lng:
-				zmap[zonetop].min.lval = LONG_MAX;
-				zmap[zonetop].max.lval = LONG_MIN;
+				zonemaps->zmaps[zonemaps->zmaps_cnt].min.lval = LONG_MAX;
+				zonemaps->zmaps[zonemaps->zmaps_cnt].max.lval = LONG_MIN;
 				break;
 			case TYPE_oid:
-				zmap[zonetop].min.ulval = ULONG_MAX;
-				zmap[zonetop].max.ulval = 0;
+				zonemaps->zmaps[zonemaps->zmaps_cnt].min.ulval = ULONG_MAX;
+				zonemaps->zmaps[zonemaps->zmaps_cnt].max.ulval = 0;
 				break;
 			case TYPE_flt:
-				zmap[zonetop].min.fval = FLT_MAX;
-				zmap[zonetop].max.fval = FLT_MIN;
+				zonemaps->zmaps[zonemaps->zmaps_cnt].min.fval = FLT_MAX;
+				zonemaps->zmaps[zonemaps->zmaps_cnt].max.fval = FLT_MIN;
 				break;
 			case TYPE_dbl:
-				zmap[zonetop].min.dval = DBL_MAX;
-				zmap[zonetop].max.dval = -DBL_MAX;
+				zonemaps->zmaps[zonemaps->zmaps_cnt].min.dval = DBL_MAX;
+				zonemaps->zmaps[zonemaps->zmaps_cnt].max.dval = -DBL_MAX;
 			}
 		}
 
@@ -347,11 +322,12 @@ void zonemaps(Column column)
 			case TYPE_dbl: val.dval  = *(double*) (column.col + i*stride[column.coltype]); upd(dval); break;
 		}
 	}
-	if ((i-1)%rpp) zonetop++;
-	zonetop++;
+	if ((i-1)%rpp) zonemaps->zmaps_cnt++;
+	zonemaps->zmaps_cnt++;
 	zone_create_time = usec()-t0;
 
 	VERBOSE printf("%s zonemap  creation time=%ld, %ld usec per thousand values\n", column.colname,  zone_create_time, ((long)zone_create_time*1000)/column.colcount);
+	return zonemaps;
 }
 
 void
@@ -473,7 +449,6 @@ do {									\
 
 	VERBOSE printf("%s imprints creation time=%ld, %ld usec per thousand values\n", column.colname, imprints_create_time, ((long)imprints_create_time*1000)/column.colcount);
 	PRINT_HISTO printHistogram(histogram, "Value distribution");
-	PRINT_IMPRINTS printImprint(column);
 
 }
 
@@ -649,7 +624,7 @@ Imprints_index* simd_imprints(Column column, int blocksize, int imprints_bins)
 	imps->bins = imprints_bins;   /* aka how many bits per imprint */
 	page = column.colcount/blocksize + 1; /* aka how many imprints we will need worst case */
 	imps->dct = (Dct *) malloc (sizeof(Dct) * page);
-	imps->imprints = (long *) malloc (sizeof(long)*(page/(BITS/imps->bins)+1));
+	imps->imprints = (char *) malloc (page*(imps->bins/8));
 	imps->dct_cnt = 0;
 	imps->imps_cnt = 0;
 
@@ -785,7 +760,7 @@ Imprints_index* simd_imprints(Column column, int blocksize, int imprints_bins)
 
 }
 
-void queries(Column column)
+void queries(Column column, Zonemap_index *zonemaps)
 {
 	unsigned long *oids, oid, k, j, lim, n, tf, l;
 	long m;
@@ -862,13 +837,13 @@ void queries(Column column)
 		/* watch out, the zones are closed (min,max) intervals */
 		#define zonequery(X,T) \
 			zonetime = usec();					\
-			for (j = 0; j < zonetop; j++) {		\
+			for (j = 0; j < zonemaps->zmaps_cnt; j++) {		\
 				STATS zindex[i] += 1;			\
-				if (slow.X <= zmap[j].min.X && shigh.X > zmap[j].max.X) { /* all qualify */			\
+				if (slow.X <= zonemaps->zmaps[j].min.X && shigh.X > zonemaps->zmaps[j].max.X) { /* all qualify */			\
 					for (k = j * rpp, lim = k + rpp < column.colcount ? k+rpp : column.colcount; k < lim; k++) {	\
 						oids[oid++] = k;															\
 					}																				\
-				} else if (!(shigh.X <= zmap[j].min.X || slow.X > zmap[j].max.X)) {					\
+				} else if (!(shigh.X <= zonemaps->zmaps[j].min.X || slow.X > zonemaps->zmaps[j].max.X)) {					\
 					/* zone maps are inclusive */													\
 					for (k = j * rpp, lim = k + rpp < column.colcount ? k+rpp : column.colcount; k < lim; k++) {	\
 						STATS zcomparisons[i] += 1;													\
@@ -1164,14 +1139,14 @@ void printMask(long mask, int limit)
 		printf("%c", isSet(mask,j)?'x':'.');
 }
 
-void printImprint(Column column)
+void printImprint(Column column, Zonemap_index *zonemaps)
 {
 	int i,j, lzone, blks = 0,tf = 0;
 	unsigned long mask;
 	ValRecord mx,mi;
 	int unique = 0;
 
-	printf("%s rpp=%d imprint cells %ld zone cells %ld \n", column.colname, rpp, dct_cnt, zonetop);
+	printf("%s rpp=%d imprint cells %ld zone cells %ld \n", column.colname, rpp, dct_cnt, zonemaps->zmaps_cnt);
 	printf("                 ");
 	for ( j =0; j< bins; j++)
 		printf("%c", j% 10 == 0?'0'+ j/10:'.');
@@ -1179,17 +1154,17 @@ void printImprint(Column column)
 
 #define findrange(X) \
 	for ( j= lzone+1; j < blks; j++) { \
-		if ( zmap[j].min.X < mi.X) \
-			mi.X = zmap[j].min.X; \
-		if ( zmap[j].max.X > mx.X) \
-			mx.X = zmap[j].max.X; \
+		if ( zonemaps->zmaps[j].min.X < mi.X) \
+			mi.X = zonemaps->zmaps[j].min.X; \
+		if ( zonemaps->zmaps[j].max.X > mx.X) \
+			mx.X = zonemaps->zmaps[j].max.X; \
 	}
 
 	for ( i=0; i< dct_cnt; i++) {
 		if (dct_scalar[i].repeated == 0) {
 			for (j=0; j<dct_scalar[i].blks;j++) {
-				mi = zmap[blks].min;
-				mx = zmap[blks].max;
+				mi = zonemaps->zmaps[blks].min;
+				mx = zonemaps->zmaps[blks].max;
 				blks ++;
 				lzone = blks;
 				printf("[ %10d ]   ", blks);
@@ -1222,8 +1197,8 @@ void printImprint(Column column)
 		} else { /* same imprint for imprint[i].blks next blocks */
 			unique++;
 			lzone = blks;
-			mi = zmap[lzone].min;
-			mx = zmap[lzone].max;
+			mi = zonemaps->zmaps[lzone].min;
+			mx = zonemaps->zmaps[lzone].max;
 			blks += dct_scalar[i].blks;
 			printf("[ %10d ]+  ", blks);
 			mask = getMask(tf);
