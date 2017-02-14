@@ -51,7 +51,7 @@ Imprint *imprint;
 /* a safer imprint struct */
 typedef struct {
 	Imprint *imprints;
-	void *bitmask;
+	long *bitmask;
 	int imptop;
 	int masktop;
 	int bins;
@@ -653,7 +653,7 @@ Imprints_index* simd_imprints(int blocksize, int imprints_bins)
 	__m256i bitmasks[256];
 	__m256i *restrict limits;
 
-	int mask;
+	long long mask, prevmask;
 	long t0;
 
 
@@ -662,6 +662,7 @@ Imprints_index* simd_imprints(int blocksize, int imprints_bins)
 	imps->bins = imprints_bins;   /* aka how many bits per imprint */
 	imps->page = colcount/blocksize + 1; /* aka how many imprints we will need worst case */
 	imps->imprints = (Imprint *) malloc (sizeof(Imprint) * imps->page);
+	imps->bitmask = (long *) malloc (sizeof(long)*(imps->page/(BITS/imps->bins)+1));
 	imps->imptop = 0;
 	imps->masktop = 0;
 
@@ -692,17 +693,25 @@ Imprints_index* simd_imprints(int blocksize, int imprints_bins)
 		bitmasks[i] = setbit_256(zero, i);
 	}
 
+	prevmask = 0;
 
 
-#define GETBIT_SIMD(SIMDTYPE)															\
-	/* perform 2 bin comparisons per simd instruction until all bins are checked */		\
-		for (int bin1 = 0, bin2 = 1; bin1 < imps->bins-2; bin1+=2, bin2+=2) {			\
-			result = _mm256_add_##SIMDTYPE(result,										\
-						_mm256_add_##SIMDTYPE(											\
-							_mm256_cmpgt_##SIMDTYPE(values_v, limits[bin1]),			\
-							_mm256_cmpgt_##SIMDTYPE(values_v, limits[bin2])));			\
-		}																				\
-		result = _mm256_sub_##SIMDTYPE(zero,result);//##SIMDTYPE(result);
+
+#define GETBIT_SIMD(SIMDTYPE)																\
+	/* perform 2 bin comparisons per simd instruction until all bins are checked */			\
+		for (int bin1 = 0, bin2 = 1; bin1 < imps->bins-2; bin1+=2, bin2+=2) {				\
+			result = _mm256_add_##SIMDTYPE(result,											\
+						_mm256_add_##SIMDTYPE(												\
+							_mm256_cmpgt_##SIMDTYPE(values_v, limits[bin1]),				\
+							_mm256_cmpgt_##SIMDTYPE(values_v, limits[bin2])));				\
+		}																					\
+		result = _mm256_sub_##SIMDTYPE(zero,result);										\
+		for (int i1 = 0, i2=1; i1 < bsteps-1; i1+=2, i2+=2) {								\
+			simd_mask = _mm256_or_si256(													\
+				_mm256_or_si256(simd_mask, bitmasks[_mm256_extract_##SIMDTYPE(result, i1)]),\
+				_mm256_or_si256(simd_mask, bitmasks[_mm256_extract_##SIMDTYPE(result, i2)])	\
+			);																				\
+		}
 
 #define GETBIT_SIMDD(SIMDTYPE) return NULL;
 #define GETBIT_SIMDF(SIMDTYPE) return NULL;
@@ -728,16 +737,55 @@ Imprints_index* simd_imprints(int blocksize, int imprints_bins)
 				default: return NULL;;
 			}
 			i += bsteps;
-
-			for (int i1 = 0, i2=1; i1 < bsteps-1; i1+=2, i2+=2) {
-				simd_mask = _mm256_or_si256(
-					_mm256_or_si256(simd_mask, bitmasks[_mm256_extract_epi32(result, i1)]),
-					_mm256_or_si256(simd_mask, bitmasks[_mm256_extract_epi32(result, i2)]));
-			}
 		}
 
-		mask = _mm256_extract_epi64(simd_mask, imps->bins);
-		//printMask(mask, imps->bins); putchar('\n');
+		switch (imps->bins) {
+			case 8:
+				mask = _mm256_extract_epi8(simd_mask, 0);
+				break;
+			case 16:
+				mask = _mm256_extract_epi16(simd_mask, 0);
+				break;
+			case 32:
+				mask = _mm256_extract_epi32(simd_mask, 0);
+				break;
+			case 64:
+				mask = _mm256_extract_epi64(simd_mask, 0);
+				break;
+			case 128:
+				break;
+			case 256:
+				break;
+			default:
+				break;
+		}
+
+		if (mask == prevmask && imps->imprints[imps->imptop-1].blks < ((1<<MAXOFFSET)-1)) {
+			if (imps->imprints[imps->imptop - 1].repeated == 0) {
+				if (imps->imprints[imps->imptop - 1].blks > 1) {
+					imps->imprints[imps->imptop - 1].blks--;
+					imps->imptop++;
+					imps->imprints[imps->imptop-1].blks = 1;
+				}
+				imps->imprints[imps->imptop-1].repeated = 1;
+			}
+			/* same mask as before */
+			imps->imprints[imps->imptop - 1].blks++;
+		} else {
+			/* new mask */
+			prevmask = mask;
+			imps->bins == 64 ? (imps->bitmask[imps->masktop] = mask): (imps->bitmask[imps->masktop/(BITS/imps->bins)] |= mask<<((imps->masktop%(BITS/imps->bins))*imps->bins));
+			imps->masktop++;
+
+			if (imps->imptop > 0 && imps->imprints[imps->imptop - 1].repeated == 0 && imps->imprints[imps->imptop-1].blks < ((1<<MAXOFFSET)-1)) {
+				imps->imprints[imps->imptop - 1].blks++;
+			} else {
+				imps->imprints[imps->imptop].blks = 1;
+				imps->imprints[imps->imptop].repeated = 0;
+				imps->imptop++;
+			}
+		}
+		/* printMask(mask, imps->bins); putchar('\n'); */
 	}
 
 	/* end creation, stop timer */
@@ -745,6 +793,7 @@ Imprints_index* simd_imprints(int blocksize, int imprints_bins)
 
 
 	VERBOSE printf("%s simd_imprints creation time=%ld, %ld usec per thousand values\n", colname, simd_imprints_create_time, ((long)simd_imprints_create_time*1000)/colcount);
+	VERBOSE printf("%s %d=%d %d=%d\n", colname, masktop, imps->masktop, imptop, imps->imptop);
 
 	return imps;
 
