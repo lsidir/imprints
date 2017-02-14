@@ -35,7 +35,7 @@
 #endif
 
 
-/* just to get a BATlike structure */
+/* Using MonetDB style types */
 #define TYPE_void   0
 #define TYPE_bte    3
 #define TYPE_sht    4
@@ -45,11 +45,14 @@
 #define TYPE_dbl    11
 #define TYPE_lng    12
 #define TYPE_str    13
+/* size (in bytes) of supported types as defined by MonetDB */
+int stride[14] = {0,0,0,1,2,0,4,8,0,0,4,8,8,0};
+
 
 #define setBit(X,Y)      ((((long)1)<<Y) | ( ~(((long)1)<<Y) & X))
 #define isSet(X,Y)       (((((long)1)<<Y) & X) ? 1 : 0)
 #define COMPRESSION_MASK (~((~((unsigned long) 0))<<(bins)))
-#define getMask(I)       (bins==64?bitmask[I]:((((unsigned long) bitmask[((I)*bins)/BITS])>>(((I)%(BITS/bins))*(bins))) & COMPRESSION_MASK))
+#define getMask(I)       (bins==64?imprints[I]:((((unsigned long) imprints[((I)*bins)/BITS])>>(((I)%(BITS/bins))*(bins))) & COMPRESSION_MASK))
 
 typedef union {
 	char bval;
@@ -60,3 +63,14 @@ typedef union {
 	float fval;
 	double dval;
 } ValRecord;
+
+typedef struct {
+	char          filename[1024];
+	char          colname[1024];
+	char          typename[64];
+	int           coltype;			/* as given by TYPE_* defines	*/
+	unsigned long colcount;			/* count of values in column	*/
+	char          *col;				/* heap of data					*/
+	ValRecord     min;				/* min value in col				*/
+	ValRecord     max;				/* max value in col				*/
+} Column;

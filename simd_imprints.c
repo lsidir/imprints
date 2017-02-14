@@ -1,22 +1,10 @@
 #include "simd_imprints.h"
 
-/* input params */
-char          filename[1024];
-char          colname[1024];
-char          typename[64];
-int           coltype;
-unsigned long colcount;
-
-/* heap with column values */
-char *col;
-
 /* global bounds */
-ValRecord    min,    max, slice;
 ValRecord absmin, absmax, mxbins[BITS], mibins[BITS];
 
 /* auxilary variables used globaly */
 FILE *devnull;
-int stride[14] = {0,0,0,1,2,0,4,8,0,0,4,8,8,0}; /* size (in bytes) of supported types as defined by MonetDB */
 unsigned long pages;                            /* total pages in the column */
 int rpp;                                        /* rows per page */
 int sorted;                                     /* column is sorted */
@@ -34,36 +22,35 @@ typedef struct {
 Zonemap *zmap;
 long zonetop;
 
-/* The Column Imprints contains a binned bit-mask structure
- * to weed out lines/blocks of no interest in a scan.
- * The mask vector is simply compressed, keeping track on
- * the number of blocks it covers. From the blks we can
+/* The Column Imprints contains a binned imprint bitvector
+ * to weed out blocks of no interest in a scan.
+ * The imprint vectors are simply compressed, keeping track on
+ * the number of blocks each imprint covers. From the blks we can
  * calculate the actual oid ranges, provided we scan only.
  */
 #define MAXOFFSET 24
 typedef struct {
-	unsigned int blks:MAXOFFSET;
-	unsigned int repeated:1;                         /* the imprints in the range are all the same */
-	unsigned int flgs:8 * sizeof(int) - MAXOFFSET-1; /* for future use, e.g. micro swaps */
-} Imprint;
-Imprint *imprint;
+	unsigned int blks:MAXOFFSET;	/* blocks count						*/
+	unsigned int repeated:1;		/* same or unique imprints in blks	*/
+	unsigned int flgs:8 * sizeof(int) - MAXOFFSET-1; /* for future use	*/
+} Dct;
 
-/* a safer imprint struct */
 typedef struct {
-	Imprint *imprints;
-	long *bitmask;
-	int imptop;
-	int masktop;
-	int bins;
-	int blocksize;
-	int page;
+	Dct *dct;		/* the dictionary structure				*/
+	long *imprints;	/* the imprint vectors					*/
+	long dct_cnt;	/* count of dictionary entries			*/
+	long imps_cnt;	/* count of imprint vector entries		*/
+	int bins;		/* number of bins						*/
+	int blocksize;	/* number of values covered per block	*/
 } Imprints_index;
-Imprints_index *simd_imprint;
 
-long *bitmask;
+
+/*****************/
 long globalmask;
-int imptop;
-int masktop;
+Dct *dct_scalar;
+long *imprints;
+long imps_cnt;
+long dct_cnt;
 int bins;
 
 /* stat vars for imprints */
@@ -77,93 +64,95 @@ unsigned long mask;
 unsigned long innermask;
 
 /* functions (in call order)-ish */
-void isSorted();
-void zonemaps();
-void imprints();
-void imps_sample();
-void imps_histogram(ValRecord *sample, int smp);
+void isSorted(Column column);
+void zonemaps(Column column);
+void scalar_imprints(Column column);
+void imps_sample(Column column);
+void imps_histogram(Column column, ValRecord *sample, int smp);
 void stats();
-void queries();
-void genQueryRange(int i);
+void queries(Column column);
+void genQueryRange(Column column, int i);
 void printHistogram(long histo[BITS], char *name);
-void printBins();
+void printBins(Column column);
 void printMask(long mask, int limit);
-void printImprint();
+void printImprint(Column column);
 void statistics();
-Imprints_index* simd_imprints(int blocksize, int imprint_bins);
+Imprints_index* simd_imprints(Column column, int blocksize, int imprint_bins);
 
 
 
 /* main function for stand alone imprints */
 int main(int argc, char **argv)
 {
+	Column column;
 	FILE *cfile;
 	long filesize;
 	size_t rd;
+	Imprints_index *simd_imps_orig;
 
 	if (argc != 5) {
 		printf("usage: %s type count file column\n", argv[0]);
 		return -1;
 	}
 
-	strcpy(colname, argv[4]);
-	strcpy(filename, argv[3]);
-	colcount = atoi(argv[2]);
-	strcpy(typename, argv[1]);
+	strcpy(column.colname, argv[4]);
+	strcpy(column.filename, argv[3]);
+	column.colcount = atoi(argv[2]);
+	strcpy(column.typename, argv[1]);
 
-	if (strcmp(typename, "tinyint") == 0 || strcmp(argv[1], "boolean") == 0) {
-		coltype  = TYPE_bte;
-		min.bval = 127;
-		max.bval = -127;
-	} else if (strcmp(typename, "char") == 0 || strcmp(argv[1],"smallint")== 0 || strcmp(argv[1], "short")== 0) {
-		coltype  = TYPE_sht;
-		min.sval = 32767;
-		max.sval = -32767;
-	} else if (strcmp(typename, "decimal") == 0 || strcmp(argv[1], "int") == 0 || strcmp(argv[1], "date") == 0) {
-		coltype  = TYPE_int;
-		min.ival = INT_MAX;
-		max.ival = INT_MIN;
-	} else if (strcmp(typename, "long") == 0 || strcmp(argv[1], "bigint") == 0) {
-		coltype  = TYPE_lng;
-		min.lval = LONG_MAX;
-		max.lval = LONG_MIN;
-	} else if (strcmp(typename, "float") == 0 || strcmp(argv[1], "real") == 0) {
-		coltype= TYPE_flt;
-		min.fval = FLT_MAX;
-		max.fval = FLT_MIN;
-	} else if (strcmp(typename, "double") == 0 ) {
-		coltype  = TYPE_dbl;
-		min.dval = DBL_MAX;
-		max.dval = -DBL_MAX;
-	} else if (strcmp(typename, "oid") == 0) {
-		coltype  = TYPE_oid;
-		min.lval = ULONG_MAX;
-		max.lval = 0;
+	if (strcmp(column.typename, "tinyint") == 0 || strcmp(argv[1], "boolean") == 0) {
+		column.coltype  = TYPE_bte;
+		column.min.bval = 127;
+		column.max.bval = -127;
+	} else if (strcmp(column.typename, "char") == 0 || strcmp(argv[1],"smallint")== 0 || strcmp(argv[1], "short")== 0) {
+		column.coltype  = TYPE_sht;
+		column.min.sval = 32767;
+		column.max.sval = -32767;
+	} else if (strcmp(column.typename, "decimal") == 0 || strcmp(argv[1], "int") == 0 || strcmp(argv[1], "date") == 0) {
+		column.coltype  = TYPE_int;
+		column.min.ival = INT_MAX;
+		column.max.ival = INT_MIN;
+	} else if (strcmp(column.typename, "long") == 0 || strcmp(argv[1], "bigint") == 0) {
+		column.coltype  = TYPE_lng;
+		column.min.lval = LONG_MAX;
+		column.max.lval = LONG_MIN;
+	} else if (strcmp(column.typename, "float") == 0 || strcmp(argv[1], "real") == 0) {
+		column.coltype= TYPE_flt;
+		column.min.fval = FLT_MAX;
+		column.max.fval = FLT_MIN;
+	} else if (strcmp(column.typename, "double") == 0 ) {
+		column.coltype  = TYPE_dbl;
+		column.min.dval = DBL_MAX;
+		column.max.dval = -DBL_MAX;
+	} else if (strcmp(column.typename, "oid") == 0) {
+		column.coltype  = TYPE_oid;
+		column.min.lval = ULONG_MAX;
+		column.max.lval = 0;
 	} else {
-		printf("type %s not supported\n", typename);
+		printf("type %s not supported\n", column.typename);
 		return -1;
 	}
-	absmin = max;
-	absmax = min;
+	absmin = column.max;
+	absmax = column.min;
 
-	cfile = fopen(filename, "r");
+	cfile = fopen(column.filename, "r");
 	if (cfile == NULL) {
-		printf("failed to open column file %s\n", filename);
+		printf("failed to open column file %s\n", column.filename);
 		return -1;
 	}
 	fseek(cfile, 0, SEEK_END);
 	filesize = ftell(cfile);
 	if (filesize == 0){
-		printf("empty open column file %s\n", filename);
+		printf("empty open column file %s\n", column.filename);
 		return -1;
 	}
-	col = (char *) aligned_alloc(32, sizeof(col)*filesize);
-	if (col == 0) {
-		printf("malloc failed %ld\n", filesize * sizeof(col));
+	column.col = (char *) aligned_alloc(32, sizeof(column.col)*filesize);
+	if (column.col == 0) {
+		printf("malloc failed %ld\n", filesize * sizeof(column.col));
 		return -1;
 	}
 	rewind(cfile);
-	if ((rd = fread(col, 1, filesize, cfile)) != filesize) {
+	if ((rd = fread(column.col, 1, filesize, cfile)) != filesize) {
 		printf("Could read only %ld of %ld bytes\n", rd, filesize);
 		fclose(cfile);
 		return -1;
@@ -175,12 +164,12 @@ int main(int argc, char **argv)
 		return -1;
 	}
 
-	rpp = PAGESIZE/stride[coltype];
+	rpp = PAGESIZE/stride[column.coltype];
 	if (rpp == 0) {
 		printf("rows per pages is 0\n");
 		return -1;
 	}
-	pages = colcount/rpp + 1;
+	pages = column.colcount/rpp + 1;
 	if (pages > MAX_IMPS) {
 		printf("there are too many pages %ld\n", pages);
 		return -1;
@@ -195,67 +184,67 @@ int main(int argc, char **argv)
 	             "sysconf(pagesize) %ld "
 	             "rpp %d "
 	             "pages %ld\n",
-	             colname, filename,
+	             column.colname, column.filename,
 	             filesize,
-	             typename, coltype,
-	             stride[coltype],
-	             colcount,
+	             column.typename, column.coltype,
+	             stride[column.coltype],
+	             column.colcount,
 	             PAGESIZE,
 	             sysconf(_SC_PAGESIZE),
 	             rpp,
 	             pages);
 
 	/* check if column is sorted and set sorted = 1 if it is */
-	isSorted();
+	isSorted(column);
 
 	/* create zonemaps */
-	zonemaps();
+	zonemaps(column);
 	/*create imprints */
-	imprints();
+	scalar_imprints(column);
 	/*create simd_imprints() equal sized as the original imprint */
-	simd_imprints(rpp, bins);
+	simd_imps_orig = simd_imprints(column, rpp, bins);
 
 	VERBOSE printf("%s tuples=%ld size=%ld(bytes), zonemap_sz=%ld(bytes) %ld%% #zones=%ld, imprints_sz=%ld(bytes) %ld%%,",
-	             colname, colcount, filesize,
-	             zonetop * 2 * stride[coltype], ((long)zonetop * 2 * stride[coltype] * 100) / filesize, zonetop,
-	             ((long) (masktop / (BITS/bins)) * sizeof(long) + imptop * sizeof(Imprint)),
-	             100 * ((long) (masktop / (BITS/bins)) * sizeof(long) + imptop * sizeof(Imprint)) / filesize);
-	VERBOSE printf(" #imprints=%d #dict=%d\n", masktop, imptop);
+	             column.colname, column.colcount, filesize,
+	             zonetop * 2 * stride[column.coltype], ((long)zonetop * 2 * stride[column.coltype] * 100) / filesize, zonetop,
+	             ((long) (imps_cnt / (BITS/bins)) * sizeof(long) + dct_cnt * sizeof(Dct)),
+	             100 * ((long) (imps_cnt / (BITS/bins)) * sizeof(long) + dct_cnt * sizeof(Dct)) / filesize);
+	VERBOSE printf(" #imprints=%ld #dict=%ld\n", imps_cnt, dct_cnt);
 
 	/* run queries */
-	queries();
-	statistics();
+	queries(column);
+	statistics(column);
 
 
 	VERBOSE printf("end of run\n");
 
 	/* before exiting free memory for cleaness */
-	free(col);
-	free(imprint);
-	free(bitmask);
+	free(column.col);
+	free(dct_scalar);
+	free(imprints);
 	free(zmap);
 	return 1;
 }
 
 /* check if a column is sorted */
-void isSorted()
+void isSorted(Column column)
 {
 	int i;
 
 #define checksorted(T)								\
-	for (sorted=1, i = 1; i<colcount; i++)			\
-		if (((T*)col)[i] < ((T*)col)[i-1]) {		\
+	for (sorted=1, i = 1; i<column.colcount; i++)			\
+		if (((T*)column.col)[i] < ((T*)column.col)[i-1]) {		\
 			sorted = 0;								\
 			break;									\
 		}											\
 	if (sorted == 0)								\
-		for (sorted=1, i = 1; i<colcount; i++)		\
-			if (((T*)col)[i] > ((T*)col)[i-1]) {	\
+		for (sorted=1, i = 1; i<column.colcount; i++)		\
+			if (((T*)column.col)[i] > ((T*)column.col)[i-1]) {	\
 				sorted = 0;							\
 				break;								\
 			}
 
-	switch (coltype) {
+	switch (column.coltype) {
 	case TYPE_bte:
 		checksorted(char);
 		break;
@@ -278,7 +267,7 @@ void isSorted()
 		checksorted(double);
 	}
 
-	VERBOSE printf("%s sorted property %d\n", colname, sorted);
+	VERBOSE printf("%s sorted property %d\n", column.colname, sorted);
 }
 
 long usec()
@@ -293,7 +282,7 @@ long usec()
 	return (long) tp.tv_sec * 1000000 + (long) tp.tv_usec;
 }
 
-void zonemaps()
+void zonemaps(Column column)
 {
 	ValRecord val;
 	long i;
@@ -305,8 +294,8 @@ void zonemaps()
 	memset((char*)zmap, 0, sizeof(Zonemap)*(pages+1));
 
 #define upd(X) \
-		if (val.X < min.X) min.X = val.X; \
-		if (val.X > max.X) max.X = val.X; \
+		if (val.X < column.min.X) column.min.X = val.X; \
+		if (val.X > column.max.X) column.max.X = val.X; \
 		if (zmap[zonetop].min.X > val.X) \
 			zmap[zonetop].min.X = val.X; \
 		if (zmap[zonetop].max.X < val.X) \
@@ -314,10 +303,10 @@ void zonemaps()
 
 	t0 = usec();
 	zonetop = -1;
-	for (i=0; i < colcount; i++) {
+	for (i=0; i < column.colcount; i++) {
 		if (!(i&new)) {
 			zonetop++;
-			switch (coltype) {
+			switch (column.coltype) {
 			case TYPE_bte:
 				zmap[zonetop].min.bval = 127;
 				zmap[zonetop].max.bval = -127;
@@ -348,25 +337,25 @@ void zonemaps()
 			}
 		}
 
-		switch(coltype){
-			case TYPE_bte: val.bval  = *(char*)   (col + i*stride[coltype]); upd(bval); break;
-			case TYPE_sht: val.sval  = *(short *) (col + i*stride[coltype]); upd(sval); break;
-			case TYPE_int: val.ival  = *(int*)    (col + i*stride[coltype]); upd(ival); break;
-			case TYPE_lng: val.lval  = *(long*)   (col + i*stride[coltype]); upd(lval); break;
-			case TYPE_oid: val.ulval = *(unsigned long *) (col + i*stride[coltype]); upd(ulval); break;
-			case TYPE_flt: val.fval  = *(float*)  (col + i*stride[coltype]); upd(fval);break;
-			case TYPE_dbl: val.dval  = *(double*) (col + i*stride[coltype]); upd(dval); break;
+		switch(column.coltype){
+			case TYPE_bte: val.bval  = *(char*)   (column.col + i*stride[column.coltype]); upd(bval); break;
+			case TYPE_sht: val.sval  = *(short *) (column.col + i*stride[column.coltype]); upd(sval); break;
+			case TYPE_int: val.ival  = *(int*)    (column.col + i*stride[column.coltype]); upd(ival); break;
+			case TYPE_lng: val.lval  = *(long*)   (column.col + i*stride[column.coltype]); upd(lval); break;
+			case TYPE_oid: val.ulval = *(unsigned long *) (column.col + i*stride[column.coltype]); upd(ulval); break;
+			case TYPE_flt: val.fval  = *(float*)  (column.col + i*stride[column.coltype]); upd(fval);break;
+			case TYPE_dbl: val.dval  = *(double*) (column.col + i*stride[column.coltype]); upd(dval); break;
 		}
 	}
 	if ((i-1)%rpp) zonetop++;
 	zonetop++;
 	zone_create_time = usec()-t0;
 
-	VERBOSE printf("%s zonemap  creation time=%ld, %ld usec per thousand values\n", colname,  zone_create_time, ((long)zone_create_time*1000)/colcount);
+	VERBOSE printf("%s zonemap  creation time=%ld, %ld usec per thousand values\n", column.colname,  zone_create_time, ((long)zone_create_time*1000)/column.colcount);
 }
 
 void
-imprints()
+scalar_imprints(Column column)
 {
 	long i, mask, prevmask;
 	long t0;
@@ -377,24 +366,24 @@ imprints()
 
 
 	/* sample to create set the number of bins */
-	imps_sample();
+	imps_sample(column);
 
 	/* how many mask vectors fit in the imprint */
 	fits = BITS/bins;
-	imptop = 0;
-	masktop = 0;
+	dct_cnt = 0;
+	imps_cnt = 0;
 	prevmask = 0;
 	mask = 0;
 	new = rpp-1; /* rpp is always power of 2 */
 
-	imprint = (Imprint *) malloc (sizeof(Imprint)*pages);
-	bitmask = (long *) malloc (sizeof(long)*(pages/fits+1));
+	dct_scalar = (Dct *) malloc (sizeof(Dct)*pages);
+	imprints = (long *) malloc (sizeof(long)*(pages/fits+1));
 
-	/* init bitmask */
-	for (i=0, masktop=pages/fits+1; i<masktop; i++) {
-		bitmask[i]=0;
+	/* init imprints */
+	for (i=0, imps_cnt=pages/fits+1; i<imps_cnt; i++) {
+		imprints[i]=0;
 	}
-	masktop=0;
+	imps_cnt=0;
 
 #define GETBIT(Z, X)					\
 do {									\
@@ -406,73 +395,73 @@ do {									\
 
 	t0 = usec();
 	/* start creation */
-	for (i=0; i<colcount; i++) {
+	for (i=0; i<column.colcount; i++) {
 		if (!(i&new) && i>0) {
 			/* compress list */
-			if (prevmask == mask && imprint[imptop-1].blks < ((1<<MAXOFFSET)-1)) {
-				if (imprint[imptop - 1].repeated == 0) {
-					if (imprint[imptop - 1].blks > 1) {
-						imprint[imptop - 1].blks--; /* reduce previous by 1 */
-						imptop++;
-						imprint[imptop-1].blks = 1;   /* the new is a repeat */
+			if (prevmask == mask && dct_scalar[dct_cnt-1].blks < ((1<<MAXOFFSET)-1)) {
+				if (dct_scalar[dct_cnt - 1].repeated == 0) {
+					if (dct_scalar[dct_cnt - 1].blks > 1) {
+						dct_scalar[dct_cnt - 1].blks--; /* reduce previous by 1 */
+						dct_cnt++;
+						dct_scalar[dct_cnt-1].blks = 1;   /* the new is a repeat */
 					}
-					imprint[imptop-1].repeated = 1;
+					dct_scalar[dct_cnt-1].repeated = 1;
 				}
 				/* same mask as before */
-				imprint[imptop - 1].blks++;
+				dct_scalar[dct_cnt - 1].blks++;
 			} else {
 				/* new mask */
 				prevmask = mask;
-				bins == 64? (bitmask[masktop] = mask): (bitmask[masktop/fits] |= mask<<((masktop%fits)*bins));
-				masktop++;
+				bins == 64? (imprints[imps_cnt] = mask): (imprints[imps_cnt/fits] |= mask<<((imps_cnt%fits)*bins));
+				imps_cnt++;
 
-				if (imptop > 0 && imprint[imptop - 1].repeated == 0 && imprint[imptop-1].blks < ((1<<MAXOFFSET)-1)) {
-					imprint[imptop - 1].blks++;
+				if (dct_cnt > 0 && dct_scalar[dct_cnt - 1].repeated == 0 && dct_scalar[dct_cnt-1].blks < ((1<<MAXOFFSET)-1)) {
+					dct_scalar[dct_cnt - 1].blks++;
 				} else {
-					imprint[imptop].blks = 1;
-					imprint[imptop].repeated = 0;
-					imptop++;
+					dct_scalar[dct_cnt].blks = 1;
+					dct_scalar[dct_cnt].repeated = 0;
+					dct_cnt++;
 				}
 			}
 			mask = 0;
 		}
-		switch (coltype) {
-			case TYPE_bte: val.bval  = *(char*)   (col + i*stride[coltype]); GETBIT(bit, bval); break;
-			case TYPE_sht: val.sval  = *(short*)  (col + i*stride[coltype]); GETBIT(bit, sval); break;
-			case TYPE_int: val.ival  = *(int*)    (col + i*stride[coltype]); GETBIT(bit, ival); break;
-			case TYPE_lng: val.lval  = *(long*)   (col + i*stride[coltype]); GETBIT(bit, lval); break;
-			case TYPE_oid: val.ulval = *(unsigned long*) (col + i*stride[coltype]); GETBIT(bit, ulval); break;
-			case TYPE_flt: val.fval  = *(float*)  (col + i*stride[coltype]); GETBIT(bit, fval); break;
-			case TYPE_dbl: val.dval  = *(double*) (col + i*stride[coltype]); GETBIT(bit, dval); break;
+		switch (column.coltype) {
+			case TYPE_bte: val.bval  = *(char*)   (column.col + i*stride[column.coltype]); GETBIT(bit, bval); break;
+			case TYPE_sht: val.sval  = *(short*)  (column.col + i*stride[column.coltype]); GETBIT(bit, sval); break;
+			case TYPE_int: val.ival  = *(int*)    (column.col + i*stride[column.coltype]); GETBIT(bit, ival); break;
+			case TYPE_lng: val.lval  = *(long*)   (column.col + i*stride[column.coltype]); GETBIT(bit, lval); break;
+			case TYPE_oid: val.ulval = *(unsigned long*) (column.col + i*stride[column.coltype]); GETBIT(bit, ulval); break;
+			case TYPE_flt: val.fval  = *(float*)  (column.col + i*stride[column.coltype]); GETBIT(bit, fval); break;
+			case TYPE_dbl: val.dval  = *(double*) (column.col + i*stride[column.coltype]); GETBIT(bit, dval); break;
 			default: bit =0;
 		}
 		mask = setBit(mask, bit);
 	}
 	/* last mask */
-	if (prevmask == mask && imptop > 0 && imprint[imptop-1].blks < (1<<MAXOFFSET)) {
-		if (imprint[imptop - 1].repeated == 0) {
-			if (imprint[imptop - 1].blks == 1) { /* only 1 on previous    */
-				imprint[imptop - 1].repeated = 1;
+	if (prevmask == mask && dct_cnt > 0 && dct_scalar[dct_cnt-1].blks < (1<<MAXOFFSET)) {
+		if (dct_scalar[dct_cnt - 1].repeated == 0) {
+			if (dct_scalar[dct_cnt - 1].blks == 1) { /* only 1 on previous    */
+				dct_scalar[dct_cnt - 1].repeated = 1;
 			} else {
-				imprint[imptop - 1].blks--;  /* reduce previous by 1 */
-				imprint[imptop].blks = 1;    /* the new is a repeat */
-				imprint[imptop].repeated = 1;
-				bins == 64? (bitmask[masktop] = mask): (bitmask[masktop/fits] |= mask<<((masktop%fits)*bins));
-				masktop++;
-				imptop++;
+				dct_scalar[dct_cnt - 1].blks--;  /* reduce previous by 1 */
+				dct_scalar[dct_cnt].blks = 1;    /* the new is a repeat */
+				dct_scalar[dct_cnt].repeated = 1;
+				bins == 64? (imprints[imps_cnt] = mask): (imprints[imps_cnt/fits] |= mask<<((imps_cnt%fits)*bins));
+				imps_cnt++;
+				dct_cnt++;
 			}
 		}
 		/* same mask as before */
-		imprint[imptop - 1].blks++;
+		dct_scalar[dct_cnt - 1].blks++;
 	} else {
-		bins == 64? (bitmask[masktop] = mask): (bitmask[masktop/fits] |= mask<<((masktop%fits)*bins));
-		masktop++;
-		if (imptop > 0 && imprint[imptop - 1].repeated == 0) {
-			imprint[imptop - 1].blks++;
+		bins == 64? (imprints[imps_cnt] = mask): (imprints[imps_cnt/fits] |= mask<<((imps_cnt%fits)*bins));
+		imps_cnt++;
+		if (dct_cnt > 0 && dct_scalar[dct_cnt - 1].repeated == 0) {
+			dct_scalar[dct_cnt - 1].blks++;
 		} else {
-			imprint[imptop].blks = 1;
-			imprint[imptop].repeated = 0;
-			imptop++;
+			dct_scalar[dct_cnt].blks = 1;
+			dct_scalar[dct_cnt].repeated = 0;
+			dct_cnt++;
 		}
 	}
 
@@ -482,36 +471,34 @@ do {									\
 	/* stats gathering */
 	stats();
 
-	VERBOSE printf("%s imprints creation time=%ld, %ld usec per thousand values\n", colname, imprints_create_time, ((long)imprints_create_time*1000)/colcount);
+	VERBOSE printf("%s imprints creation time=%ld, %ld usec per thousand values\n", column.colname, imprints_create_time, ((long)imprints_create_time*1000)/column.colcount);
 	PRINT_HISTO printHistogram(histogram, "Value distribution");
-	PRINT_IMPRINTS printImprint();
+	PRINT_IMPRINTS printImprint(column);
 
 }
 
-static int
-cmpvalues(const void *p1, const void *p2)
-{
-	ValRecord v1 = *(ValRecord *) p1;
-	ValRecord v2 = *(ValRecord *) p2;
-
-#define CMPVAL(X) \
+#define cmpvalues(X)	\
+static int	\
+cmpvalues##X(const void *p1, const void *p2)\
+{\
+	ValRecord v1 = *(ValRecord *) p1;\
+	ValRecord v2 = *(ValRecord *) p2;\
 	if ( v1.X < v2.X ) return -1; \
 	if ( v1.X > v2.X ) return 1; \
-	return 0;
-
-	switch (coltype) {
-		case TYPE_bte: CMPVAL(bval);
-		case TYPE_sht: CMPVAL(sval);
-		case TYPE_int: CMPVAL(ival);
-		case TYPE_lng: CMPVAL(lval);
-		case TYPE_oid: CMPVAL(ulval);
-		case TYPE_flt: CMPVAL(fval);
-		case TYPE_dbl: CMPVAL(dval);
-	}
-	return 0;
+	return 0;\
 }
 
-void imps_sample()
+cmpvalues(bval);
+cmpvalues(sval);
+cmpvalues(ival);
+cmpvalues(lval);
+cmpvalues(ulval);
+cmpvalues(fval);
+cmpvalues(dval);
+
+
+
+void imps_sample(Column column)
 {
 	ValRecord sample[SAMPLE_SZ];
 	int i,j;
@@ -519,11 +506,11 @@ void imps_sample()
 #define sampleDistribution(X,T)												\
 	/* draw the sample, */													\
 	for (j=0, i=0; i<SAMPLE_SZ; i++) {										\
-		j = (rand()*colcount)/RAND_MAX;										\
-		sample[i].X = ((T*)col)[j];											\
+		j = (rand()*column.colcount)/RAND_MAX;								\
+		sample[i].X = ((T*)column.col)[j];									\
 	}																		\
 	/* sort the sample and make it unique*/									\
-	qsort((char*) sample, SAMPLE_SZ, sizeof(ValRecord), cmpvalues);			\
+	qsort((char *) sample, SAMPLE_SZ, sizeof(ValRecord), cmpvalues##X);		\
 	for (j=0, i=1; i<SAMPLE_SZ; i++) {										\
 		if (sample[i].X != sample[j].X) {									\
 			sample[++j] = sample[i];										\
@@ -531,7 +518,7 @@ void imps_sample()
 	}																		\
 	j++;
 
-	switch(coltype){
+	switch(column.coltype){
 	case TYPE_bte:
 		sampleDistribution(bval, char);
 		break;
@@ -553,11 +540,11 @@ void imps_sample()
 	case TYPE_dbl:
 		sampleDistribution(dval, double);
 	}
-	imps_histogram(sample, j);
+	imps_histogram(column, sample, j);
 }
 
 void
-imps_histogram(ValRecord *sample, int smp) {
+imps_histogram(Column column, ValRecord *sample, int smp) {
 	int k;
 
 	mibins[0] = absmin;
@@ -593,7 +580,7 @@ imps_histogram(ValRecord *sample, int smp) {
 		}
 	}
 
-	VERBOSE printf("%s sample gives %d unique values from %d and %d bins\n", colname, smp, SAMPLE_SZ, bins);
+	VERBOSE printf("%s sample gives %d unique values from %d and %d bins\n", column.colname, smp, SAMPLE_SZ, bins);
 
 	return;
 }
@@ -609,10 +596,10 @@ stats()
 		vectors[i]= histogram[i] = 0;
 
 	tf = 0;
-	for (i=0; i<imptop; i++) {
-		for (k=0; k < imprint[i].blks; k++) {
-			if (imprint[i].repeated == 1)
-				k = imprint[i].blks;
+	for (i=0; i<dct_cnt; i++) {
+		for (k=0; k < dct_scalar[i].blks; k++) {
+			if (dct_scalar[i].repeated == 1)
+				k = dct_scalar[i].blks;
 			bits = 0;
 			mask = getMask(tf);
 			globalmask |= mask;
@@ -641,11 +628,11 @@ __m256i setbit_256(__m256i x,int k){
 }
 
 
-Imprints_index* simd_imprints(int blocksize, int imprints_bins)
+Imprints_index* simd_imprints(Column column, int blocksize, int imprints_bins)
 {
 	Imprints_index *imps;
 	int bsteps;
-	long i, b;
+	long i, b, page;
 
 	/* simd stuff */
 	__m256i *simd_bitmasks;
@@ -660,22 +647,21 @@ Imprints_index* simd_imprints(int blocksize, int imprints_bins)
 	imps = (Imprints_index *) malloc (sizeof(Imprints_index));
 	imps->blocksize = blocksize;  /* blocksize is values per block */
 	imps->bins = imprints_bins;   /* aka how many bits per imprint */
-	imps->page = colcount/blocksize + 1; /* aka how many imprints we will need worst case */
-	imps->imprints = (Imprint *) malloc (sizeof(Imprint) * imps->page);
-	imps->bitmask = (long *) malloc (sizeof(long)*(imps->page/(BITS/imps->bins)+1));
-	imps->imptop = 0;
-	imps->masktop = 0;
+	page = column.colcount/blocksize + 1; /* aka how many imprints we will need worst case */
+	imps->dct = (Dct *) malloc (sizeof(Dct) * page);
+	imps->imprints = (long *) malloc (sizeof(long)*(page/(BITS/imps->bins)+1));
+	imps->dct_cnt = 0;
+	imps->imps_cnt = 0;
 
 
-	imps->bitmask = (void *) malloc (pages * (imps->bins/8));
-	simd_bitmasks = (__m256i *) imps->bitmask;
+	simd_bitmasks = (__m256i *) imps->imprints;
 	limits = aligned_alloc(32, imps->bins*sizeof(__m256i));
 
 #define MAKE_LIMITS(SIMDTYPE, X)											\
 	for (int _i = 0; _i < imps->bins; _i++)								\
 		limits[_i] = _mm256_set1_##SIMDTYPE(mibins[_i].X);				\
 
-	switch (coltype) {
+	switch (column.coltype) {
 		case TYPE_bte: MAKE_LIMITS(epi8, bval); break;
 		case TYPE_sht: MAKE_LIMITS(epi16, sval); break;
 		case TYPE_int: MAKE_LIMITS(epi32, ival); break;
@@ -716,17 +702,17 @@ Imprints_index* simd_imprints(int blocksize, int imprints_bins)
 #define GETBIT_SIMDD(SIMDTYPE) return NULL;
 #define GETBIT_SIMDF(SIMDTYPE) return NULL;
 
-	bsteps = 256 / (stride[coltype]*8);
+	bsteps = 256 / (stride[column.coltype]*8);
 
 	t0 = usec();
 	/* start creation */
-	for (i = 0; i < colcount;) {
+	for (i = 0; i < column.colcount;) {
 		__m256i simd_mask = zero;
 
-		for (b = 0; b < imps->blocksize && i < colcount; b += bsteps) {
-			__m256i values_v = _mm256_load_si256((__m256i*) (col+i*stride[coltype]));
+		for (b = 0; b < imps->blocksize && i < column.colcount; b += bsteps) {
+			__m256i values_v = _mm256_load_si256((__m256i*) (column.col+i*stride[column.coltype]));
 			__m256i result = zero;
-			switch (coltype) {
+			switch (column.coltype) {
 				case TYPE_bte: GETBIT_SIMD(epi8); break;
 				case TYPE_sht: GETBIT_SIMD(epi16); break;
 				case TYPE_int: GETBIT_SIMD(epi32); break;
@@ -760,29 +746,29 @@ Imprints_index* simd_imprints(int blocksize, int imprints_bins)
 				break;
 		}
 
-		if (mask == prevmask && imps->imprints[imps->imptop-1].blks < ((1<<MAXOFFSET)-1)) {
-			if (imps->imprints[imps->imptop - 1].repeated == 0) {
-				if (imps->imprints[imps->imptop - 1].blks > 1) {
-					imps->imprints[imps->imptop - 1].blks--;
-					imps->imptop++;
-					imps->imprints[imps->imptop-1].blks = 1;
+		if (mask == prevmask && imps->dct[imps->dct_cnt-1].blks < ((1<<MAXOFFSET)-1)) {
+			if (imps->dct[imps->dct_cnt - 1].repeated == 0) {
+				if (imps->dct[imps->dct_cnt - 1].blks > 1) {
+					imps->dct[imps->dct_cnt - 1].blks--;
+					imps->dct_cnt++;
+					imps->dct[imps->dct_cnt-1].blks = 1;
 				}
-				imps->imprints[imps->imptop-1].repeated = 1;
+				imps->dct[imps->dct_cnt-1].repeated = 1;
 			}
 			/* same mask as before */
-			imps->imprints[imps->imptop - 1].blks++;
+			imps->dct[imps->dct_cnt - 1].blks++;
 		} else {
 			/* new mask */
 			prevmask = mask;
-			imps->bins == 64 ? (imps->bitmask[imps->masktop] = mask): (imps->bitmask[imps->masktop/(BITS/imps->bins)] |= mask<<((imps->masktop%(BITS/imps->bins))*imps->bins));
-			imps->masktop++;
+			imps->bins == 64 ? (imps->imprints[imps->imps_cnt] = mask): (imps->imprints[imps->imps_cnt/(BITS/imps->bins)] |= mask<<((imps->imps_cnt%(BITS/imps->bins))*imps->bins));
+			imps->imps_cnt++;
 
-			if (imps->imptop > 0 && imps->imprints[imps->imptop - 1].repeated == 0 && imps->imprints[imps->imptop-1].blks < ((1<<MAXOFFSET)-1)) {
-				imps->imprints[imps->imptop - 1].blks++;
+			if (imps->dct_cnt > 0 && imps->dct[imps->dct_cnt - 1].repeated == 0 && imps->dct[imps->dct_cnt-1].blks < ((1<<MAXOFFSET)-1)) {
+				imps->dct[imps->dct_cnt - 1].blks++;
 			} else {
-				imps->imprints[imps->imptop].blks = 1;
-				imps->imprints[imps->imptop].repeated = 0;
-				imps->imptop++;
+				imps->dct[imps->dct_cnt].blks = 1;
+				imps->dct[imps->dct_cnt].repeated = 0;
+				imps->dct_cnt++;
 			}
 		}
 		/* printMask(mask, imps->bins); putchar('\n'); */
@@ -792,14 +778,14 @@ Imprints_index* simd_imprints(int blocksize, int imprints_bins)
 	simd_imprints_create_time = usec() - t0;
 
 
-	VERBOSE printf("%s simd_imprints creation time=%ld, %ld usec per thousand values\n", colname, simd_imprints_create_time, ((long)simd_imprints_create_time*1000)/colcount);
-	VERBOSE printf("%s %d=%d %d=%d\n", colname, masktop, imps->masktop, imptop, imps->imptop);
+	VERBOSE printf("%s simd_imprints creation time=%ld, %ld usec per thousand values\n", column.colname, simd_imprints_create_time, ((long)simd_imprints_create_time*1000)/column.colcount);
+	VERBOSE printf("%s %ld=%ld %ld=%ld\n", column.colname, imps_cnt, imps->imps_cnt, dct_cnt, imps->dct_cnt);
 
 	return imps;
 
 }
 
-void queries()
+void queries(Column column)
 {
 	unsigned long *oids, oid, k, j, lim, n, tf, l;
 	long m;
@@ -810,12 +796,12 @@ void queries()
 	long bcomparisons[REPETITION], zcomparisons[REPETITION], icomparisons[REPETITION];
 	int i;
 
-	unsigned char  *bitmask8  = (unsigned char *) bitmask;
-	unsigned short *bitmask16 = (unsigned short *)bitmask;
-	unsigned int   *bitmask32 = (unsigned int *)  bitmask;
-	unsigned long  *bitmask64 = (unsigned long *) bitmask;
+	unsigned char  *imprints8  = (unsigned char *) imprints;
+	unsigned short *imprints16 = (unsigned short *)imprints;
+	unsigned int   *imprints32 = (unsigned int *)  imprints;
+	unsigned long  *imprints64 = (unsigned long *) imprints;
 
-	oids  = (unsigned long *) malloc(colcount * sizeof(unsigned long));
+	oids  = (unsigned long *) malloc(column.colcount * sizeof(unsigned long));
 	oid   = 0;
 	m     = 0;
 
@@ -829,7 +815,7 @@ void queries()
 	for (i = 0; i < REPETITION; i++) {
 		/* select a random range from the pool, leads to bias to skew data distribution */
 		/* use [slow,shigh) range expression */
-		genQueryRange(i);
+		genQueryRange(column, i);
 
 		/* simple scan */
 		m   = 0;
@@ -837,13 +823,13 @@ void queries()
 
 		#define simplescan(X,T) \
 			basetime = usec();					\
-			for (k = 0; k < colcount; k++) {	\
+			for (k = 0; k < column.colcount; k++) {	\
 				STATS bcomparisons[i] += 1;		\
-				if (((T*)col)[k] < shigh.X && ((T*)col)[k] >= slow.X ) {\
+				if (((T*)column.col)[k] < shigh.X && ((T*)column.col)[k] >= slow.X ) {\
 					oids[oid++] = k;\
 				}\
 			}
-		switch(coltype){
+		switch(column.coltype){
 		case TYPE_bte:
 			simplescan(bval, char);
 			break;
@@ -879,21 +865,21 @@ void queries()
 			for (j = 0; j < zonetop; j++) {		\
 				STATS zindex[i] += 1;			\
 				if (slow.X <= zmap[j].min.X && shigh.X > zmap[j].max.X) { /* all qualify */			\
-					for (k = j * rpp, lim = k + rpp < colcount ? k+rpp : colcount; k < lim; k++) {	\
+					for (k = j * rpp, lim = k + rpp < column.colcount ? k+rpp : column.colcount; k < lim; k++) {	\
 						oids[oid++] = k;															\
 					}																				\
 				} else if (!(shigh.X <= zmap[j].min.X || slow.X > zmap[j].max.X)) {					\
 					/* zone maps are inclusive */													\
-					for (k = j * rpp, lim = k + rpp < colcount ? k+rpp : colcount; k < lim; k++) {	\
+					for (k = j * rpp, lim = k + rpp < column.colcount ? k+rpp : column.colcount; k < lim; k++) {	\
 						STATS zcomparisons[i] += 1;													\
-						if (((T*)col)[k] < shigh.X && ((T*)col)[k] >= slow.X ) {					\
+						if (((T*)column.col)[k] < shigh.X && ((T*)column.col)[k] >= slow.X ) {					\
 							oids[oid++] = k;														\
 						}\
 					} \
 				}\
 			}
 
-		switch(coltype){
+		switch(column.coltype){
 		case TYPE_bte:
 			zonequery(bval,char);
 			break;
@@ -918,7 +904,7 @@ void queries()
 
 		zonetimer[i] = usec() - zonetime;
 		if (tuples[i] != oid) /* correct result check */
-			printf("%s base %ld zonemap %ld differ\n", colname, tuples[i], oid);
+			printf("%s base %ld zonemap %ld differ\n", column.colname, tuples[i], oid);
 		fprintf(devnull," %ld",m); /* to break compiler optimizations */
 
 		/* column imprint filter */
@@ -928,21 +914,21 @@ void queries()
 		oid = 0;
 		#define impsquery(X, T, B)											\
 			impstime = usec();													\
-			for (j = 0; j < imptop; j++) {										\
-				if (imprint[j].repeated == 0) {									\
-					for (k = tf + imprint[j].blks; tf < k; n++, tf++) {			\
+			for (j = 0; j < dct_cnt; j++) {										\
+				if (dct_scalar[j].repeated == 0) {									\
+					for (k = tf + dct_scalar[j].blks; tf < k; n++, tf++) {			\
 						STATS iindex[i] += 1;									\
-						if (bitmask##B[tf] & mask) {							\
+						if (imprints##B[tf] & mask) {							\
 							register T val;										\
 							l = n * rpp;										\
 							lim = l + rpp;										\
-							lim = lim > colcount ? colcount: lim;				\
-							if ((bitmask##B[tf] & ~innermask) == 0) {			\
+							lim = lim > column.colcount ? column.colcount: lim;				\
+							if ((imprints##B[tf] & ~innermask) == 0) {			\
 								for (; l < lim; l++) {							\
 									oids[oid++] = l;							\
 								}												\
 							} else {											\
-								for (val = ((T*)col)[l]; l < lim; l++, val = ((T*)col)[l]) {	\
+								for (val = ((T*)column.col)[l]; l < lim; l++, val = ((T*)column.col)[l]) {	\
 									STATS icomparisons[i] += 1;					\
 									if (val < shigh.X && val >= slow.X) {		\
 										oids[oid++] = l;						\
@@ -953,17 +939,17 @@ void queries()
 					}															\
 				} else { /* repeated mask case */								\
 					STATS iindex[i] += 1;										\
-					if (bitmask##B[tf] & mask) {								\
+					if (imprints##B[tf] & mask) {								\
 						register T val;											\
 						l = n * rpp;											\
-						lim = l + rpp * imprint[j].blks;						\
-						lim = lim > colcount ? colcount : lim;					\
-						if ((bitmask##B[tf] & ~innermask) == 0) {				\
+						lim = l + rpp * dct_scalar[j].blks;						\
+						lim = lim > column.colcount ? column.colcount : lim;					\
+						if ((imprints##B[tf] & ~innermask) == 0) {				\
 							for (; l < lim; l++) {								\
 								oids[oid++] = l;								\
 							}													\
 						} else {												\
-							for (val = ((T*)col)[l]; l < lim; l++, val = ((T*)col)[l]) {	\
+							for (val = ((T*)column.col)[l]; l < lim; l++, val = ((T*)column.col)[l]) {	\
 								STATS icomparisons[i] += 1;						\
 								if (val < shigh.X && val >= slow.X  ) {			\
 									oids[oid++] = l;							\
@@ -971,7 +957,7 @@ void queries()
 							}													\
 						}														\
 					}															\
-					n += imprint[j].blks;										\
+					n += dct_scalar[j].blks;										\
 					tf++;														\
 				}\
 			}
@@ -985,7 +971,7 @@ void queries()
 			default: break;						\
 			}
 
-		switch(coltype){
+		switch(column.coltype){
 		case TYPE_bte:
 			binchoose(bval,char);
 			break;
@@ -1010,14 +996,14 @@ void queries()
 
 		impstimer[i] = usec() - impstime;
 		if (tuples[i] != oid)
-			printf("%s base %ld imprints %ld differ\n", colname, tuples[i], oid);
+			printf("%s base %ld imprints %ld differ\n", column.colname, tuples[i], oid);
 		fprintf(devnull, "m = %ld\n", m); /* to break compiler optimizations */
 	}
 
 
 	for (i =0; i< REPETITION; i++) {
 		VERBOSE printf("%s query[%d]=%ld\t selectivity=%2.1f%%\t|\tscan = %ld\timprints = %ld\tzone = %ld\t(usec)\n",
-		       colname, i, tuples[i], tuples[i]* 100.0/colcount, basetimer[i], impstimer[i], zonetimer[i]);
+		       column.colname, i, tuples[i], tuples[i]* 100.0/column.colcount, basetimer[i], impstimer[i], zonetimer[i]);
 		STATS printf ("bindex %ld bcomparisons %ld zindex %ld zcomparisons %ld iindex %ld icomparisons %ld\n",
 		       bindex[i], bcomparisons[i], zindex[i], zcomparisons[i], iindex[i], icomparisons[i]);
 
@@ -1031,7 +1017,7 @@ void queries()
 }
 
 /* simulate a series of queries */
-void genQueryRange(int i)
+void genQueryRange(Column column, int i)
 {
 	long low, high;
 	int j;
@@ -1092,7 +1078,7 @@ foundrange:
 		putchar('\n');							\
 	}
 
-	switch (coltype) {
+	switch (column.coltype) {
 	case TYPE_bte:
 		setqueryrange(bval);
 		break;
@@ -1141,12 +1127,12 @@ void printHistogram(long histo[BITS], char *name)
 	}
 }
 
-void printBins()
+void printBins(Column column)
 {
 	int j;
-	printf("%s bins ", colname);
+	printf("%s bins ", column.colname);
 	for ( j=0; j<bins; j++)
-		switch(coltype){
+		switch(column.coltype){
 		case TYPE_bte:
 			printf(" %7d:%d ", mibins[j].bval, mxbins[j].bval);
 			break;
@@ -1178,14 +1164,14 @@ void printMask(long mask, int limit)
 		printf("%c", isSet(mask,j)?'x':'.');
 }
 
-void printImprint()
+void printImprint(Column column)
 {
 	int i,j, lzone, blks = 0,tf = 0;
 	unsigned long mask;
 	ValRecord mx,mi;
 	int unique = 0;
 
-	printf("%s rpp=%d imprint cells %d zone cells %ld \n", colname, rpp, imptop, zonetop);
+	printf("%s rpp=%d imprint cells %ld zone cells %ld \n", column.colname, rpp, dct_cnt, zonetop);
 	printf("                 ");
 	for ( j =0; j< bins; j++)
 		printf("%c", j% 10 == 0?'0'+ j/10:'.');
@@ -1199,9 +1185,9 @@ void printImprint()
 			mx.X = zmap[j].max.X; \
 	}
 
-	for ( i=0; i< imptop; i++) {
-		if (imprint[i].repeated == 0) {
-			for (j=0; j<imprint[i].blks;j++) {
+	for ( i=0; i< dct_cnt; i++) {
+		if (dct_scalar[i].repeated == 0) {
+			for (j=0; j<dct_scalar[i].blks;j++) {
 				mi = zmap[blks].min;
 				mx = zmap[blks].max;
 				blks ++;
@@ -1210,7 +1196,7 @@ void printImprint()
 				mask = getMask(tf);
 				printMask(mask,bins);
 				tf++;
-				switch(coltype){
+				switch(column.coltype){
 					case TYPE_bte:
 						printf(" %7d : %d\n", mi.bval,  mx.bval);
 					break;
@@ -1238,12 +1224,12 @@ void printImprint()
 			lzone = blks;
 			mi = zmap[lzone].min;
 			mx = zmap[lzone].max;
-			blks += imprint[i].blks;
+			blks += dct_scalar[i].blks;
 			printf("[ %10d ]+  ", blks);
 			mask = getMask(tf);
 			printMask(mask,bins);
 			tf++;
-			switch(coltype){
+			switch(column.coltype){
 			case TYPE_bte:
 				findrange(bval);
 				printf(" %7d : %d\n", mi.bval,  mx.bval);
@@ -1274,28 +1260,28 @@ void printImprint()
 			}
 		}
 	}
-	printBins();
+	printBins(column);
 
-	printf("%s histogram summary ", colname);
+	printf("%s histogram summary ", column.colname);
 	i = 0;
 	for ( j=0; j< bins; j++)
 	if ( histogram[j] == 0)  i++;
 		printf(" %d empty cells, bits used %d",i,bins-i);
-	printf("\n%s histogram", colname);
+	printf("\n%s histogram", column.colname);
 	for ( j=0; j< bins; j++)
 	if( histogram[j])
 		printf("[%d] %ld ", j, histogram[j]);
 	i=0;
 	for ( j=0; j< bins; j++)
 		 i += isSet(globalmask,j);
-	printf("\n%s vectors imptop %d masktop %d unique %d bits %d ", colname, imptop, masktop, unique, i);
+	printf("\n%s vectors dct_cnt %ld imps_cnt %ld unique %d bits %d ", column.colname, dct_cnt, imps_cnt, unique, i);
 	for ( j=0; j<= bins; j++)
 		if(vectors[j])
 			printf("[%d] %ld ", j, vectors[j]);
 	printf("\n");
 }
 
-void statistics()
+void statistics(Column column)
 {
 	double var = 0, bitvar = 0;
 	double delta = 0, bitdelta = 0;
@@ -1306,8 +1292,8 @@ void statistics()
 	int bitcnt, i, j, first, last;
 
 	assert(globalmask);
-	assert(masktop);
-	for( i= 0; i< masktop; i++){
+	assert(imps_cnt);
+	for( i= 0; i< imps_cnt; i++){
 		first= -1;
 		bitcnt = 0;
 		mask = getMask(i);
@@ -1331,11 +1317,11 @@ void statistics()
 	mean /= i;
 	bitmean /= i;
 	printf("%s bit spread average %5.3f deviation %5.3f bit density average %5.3f dev %5.3f total %d bits rpp %d\n", 
-		colname, mean, sqrt(var/masktop), bitmean, sqrt(bitvar/masktop), bins, rpp);
+		column.colname, mean, sqrt(var/imps_cnt), bitmean, sqrt(bitvar/imps_cnt), bins, rpp);
 
 	/* edit distance */
 	edit = 0; on = 0;
-	for (i=0; i< masktop; i++) {
+	for (i=0; i< imps_cnt; i++) {
 		mask = getMask(i);
 		for (j=0; j<bins; j++)
 			if (isSet(mask,j)) on++;
@@ -1346,7 +1332,7 @@ void statistics()
 		}
 	}
 	printf("%s total bits on %ld total edit distance %ld entropy is %lf\n", 
-		colname, on, edit, (double)edit/(double)(2*on));
+		column.colname, on, edit, (double)edit/(double)(2*on));
 }
 
 
