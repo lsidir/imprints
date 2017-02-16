@@ -1,5 +1,9 @@
 #include "simd_imprints.h"
 
+#ifdef __APPLE__
+#define aligned_alloc(align, n) malloc(n)
+#endif
+
 /* global bounds */
 ValRecord absmin, absmax, mxbins[BITS], mibins[BITS];
 
