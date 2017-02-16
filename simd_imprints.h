@@ -5,7 +5,9 @@
 #include <sys/time.h>
 #include <time.h>
 #include <math.h>
+#ifndef __APPLE__
 #include <malloc.h>
+#endif
 #include <unistd.h>
 #include <limits.h>
 #include <float.h>
