@@ -11,7 +11,6 @@ ValRecord absmin, absmax, mxbins[BITS], mibins[BITS];
 FILE *devnull;
 unsigned long pages;                            /* total pages in the column */
 int rpp;                                        /* rows per page */
-int sorted;                                     /* column is sorted */
 
 /* timing variables */
 long zone_create_time;
@@ -38,8 +37,11 @@ unsigned long innermask;
 
 /* functions (in call order)-ish */
 void isSorted(Column column);
+
 Zonemap_index *create_zonemaps(Column column);
-void scalar_imprints(Column column);
+Imprints_index *scalar_imprints(Column column);
+Imprints_index *simd_imprints(Column column, int blocksize, int imprint_bins);
+
 void imps_sample(Column column);
 void imps_histogram(Column column, ValRecord *sample, int smp);
 void stats();
@@ -51,7 +53,6 @@ void printBins(Column column);
 void printMask(long mask, int limit);
 void printImprint(Column column, Zonemap_index *zonemaps);
 void statistics();
-Imprints_index *simd_imprints(Column column, int blocksize, int imprint_bins);
 
 
 
@@ -63,7 +64,8 @@ int main(int argc, char **argv)
 	long filesize;
 	size_t rd;
 	Zonemap_index *zonemaps;
-	Imprints_index *simd_imps_orig;
+	Imprints_index *scalar_imps;
+	Imprints_index *simd_imps;
 
 	if (argc != 5) {
 		printf("usage: %s type count file column\n", argv[0]);
@@ -175,10 +177,11 @@ int main(int argc, char **argv)
 	/* create zonemaps */
 	zonemaps = create_zonemaps(column);
 	/*create imprints */
-	scalar_imprints(column);
+	scalar_imps = scalar_imprints(column);
 	PRINT_IMPRINTS printImprint(column, zonemaps);
 	/*create simd_imprints() equal sized as the original imprint */
-	simd_imps_orig = simd_imprints(column, rpp, bins);
+	simd_imps = simd_imprints(column, rpp, bins);
+	compareImprintsIndex(column,scalar_imps,simd_imps);
 
 	VERBOSE printf("%s tuples=%ld size=%ld(bytes), zonemap_sz=%ld(bytes) %ld%% #zones=%ld, imprints_sz=%ld(bytes) %ld%%,",
 	             column.colname, column.colcount, filesize,
@@ -188,7 +191,7 @@ int main(int argc, char **argv)
 	VERBOSE printf(" #imprints=%ld #dict=%ld\n", imps_cnt, dct_cnt);
 
 	/* run queries */
-	queries(column, zonemaps, simd_imps_orig);
+	queries(column, zonemaps, simd_imps );
 	statistics(column);
 
 
@@ -209,15 +212,15 @@ void isSorted(Column column)
 	int i;
 
 #define checksorted(T)								\
-	for (sorted=1, i = 1; i<column.colcount; i++)			\
+	for (column.sorted=1, i = 1; i<column.colcount; i++)			\
 		if (((T*)column.col)[i] < ((T*)column.col)[i-1]) {		\
-			sorted = 0;								\
+			column.sorted = 0;								\
 			break;									\
 		}											\
-	if (sorted == 0)								\
-		for (sorted=1, i = 1; i<column.colcount; i++)		\
+	if (column.sorted == 0)								\
+		for (column.sorted=1, i = 1; i<column.colcount; i++)		\
 			if (((T*)column.col)[i] > ((T*)column.col)[i-1]) {	\
-				sorted = 0;							\
+				column.sorted = 0;							\
 				break;								\
 			}
 
@@ -244,7 +247,7 @@ void isSorted(Column column)
 		checksorted(double);
 	}
 
-	VERBOSE printf("%s sorted property %d\n", column.colname, sorted);
+	VERBOSE printf("%s sorted property %d\n", column.colname, column.sorted);
 }
 
 long usec()
@@ -335,9 +338,10 @@ create_zonemaps(Column column)
 	return zonemaps;
 }
 
-void
+Imprints_index*
 scalar_imprints(Column column)
 {
+	Imprints_index *imps;
 	long i, mask, prevmask;
 	long t0;
 	int bit;
@@ -347,6 +351,7 @@ scalar_imprints(Column column)
 
 
 	/* sample to create set the number of bins */
+	imps = (Imprints_index *) malloc (sizeof(Imprints_index));
 	imps_sample(column);
 
 	/* how many mask vectors fit in the imprint */
@@ -449,12 +454,19 @@ do {									\
 	/* end creation, stop timer */
 	imprints_create_time = usec()- t0;
 
+	imps->imprints = (char *)imprints;
+	imps->dct_cnt = dct_cnt;
+	imps->imps_cnt = imps_cnt;
+	imps->blocksize = rpp;  /* blocksize is values per block */
+	imps->bins = bins;
+	imps->dct = dct_scalar;
 	/* stats gathering */
 	stats();
 
 	VERBOSE printf("%s imprints creation time=%ld, %ld usec per thousand values\n", column.colname, imprints_create_time, ((long)imprints_create_time*1000)/column.colcount);
 	PRINT_HISTO printHistogram(histogram, "Value distribution");
 
+	return imps;
 }
 
 #define cmpvalues(X)	\
@@ -998,7 +1010,7 @@ void queries(Column column, Zonemap_index *zonemaps, Imprints_index *imps)
 
 void
 simd_queries(Column column, Imprints_index *imps, long results) {
-	long simd_impstime;
+	long simd_impstime = 0;
 	__m256i low, high;
 	unsigned long dcnt; /* dctn is an increment for dct_cnt  */
 	unsigned long icnt; /* ictn is an increment for imps_cnt */
@@ -1454,4 +1466,12 @@ void statistics(Column column)
 		column.colname, on, edit, (double)edit/(double)(2*on));
 }
 
-
+void
+compareImprintsIndex(Column column, Imprints_index *imps1, Imprints_index *imps2)
+{
+	printf("%s\tindex\tIMPS1\tIMPS2\n", column.colname);
+	printf("%s\tdct_cnt\t%lu\t%lu\n", column.colname, imps1->dct_cnt, imps2->dct_cnt);
+	printf("%s\timps_cnt\t%lu\t%lu\n", column.colname, imps1->imps_cnt, imps2->imps_cnt);
+	printf("%s\tbins\t%d\t%d\n", column.colname, imps1->bins, imps2->bins);
+	printf("%s\tblocksize\t%d\t%d\n", column.colname, imps1->blocksize, imps2->blocksize);
+}

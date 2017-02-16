@@ -75,6 +75,7 @@ typedef struct {
 	char          *col;				/* heap of data					*/
 	ValRecord     min;				/* min value in col				*/
 	ValRecord     max;				/* max value in col				*/
+	int           sorted;			/* 1 if sorted					*/
 } Column;
 
 /* The Column Imprints contains a binned imprint bitvector
@@ -109,3 +110,8 @@ typedef struct {
 	Zonemap *zmaps;
 	unsigned long zmaps_cnt;
 } Zonemap_index;
+
+
+/* function declarations */
+
+void compareImprintsIndex(Column column, Imprints_index *imps1, Imprints_index *imps2);
