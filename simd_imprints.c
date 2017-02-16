@@ -367,7 +367,7 @@ do {									\
 	int _i;								\
 	Z = 0;								\
 	for (_i = 1; _i < bins; _i++)		\
-		Z += ((val.X) >= mibins[_i].X);	\
+		Z += ((val.X) > mibins[_i].X);	\
 } while (0)
 
 	t0 = usec();
@@ -799,7 +799,7 @@ void queries(Column column, Zonemap_index *zonemaps, Imprints_index *imps)
 			basetime = usec();					\
 			for (k = 0; k < column.colcount; k++) {	\
 				STATS bcomparisons[i] += 1;		\
-				if (((T*)column.col)[k] < shigh.X && ((T*)column.col)[k] >= slow.X ) {\
+				if (((T*)column.col)[k] <= shigh.X && ((T*)column.col)[k] > slow.X ) {\
 					oids[oid++] = k;\
 				}\
 			}
@@ -838,15 +838,15 @@ void queries(Column column, Zonemap_index *zonemaps, Imprints_index *imps)
 			zonetime = usec();					\
 			for (j = 0; j < zonemaps->zmaps_cnt; j++) {		\
 				STATS zindex[i] += 1;			\
-				if (slow.X <= zonemaps->zmaps[j].min.X && shigh.X > zonemaps->zmaps[j].max.X) { /* all qualify */			\
+				if (slow.X < zonemaps->zmaps[j].min.X && shigh.X >= zonemaps->zmaps[j].max.X) { /* all qualify */			\
 					for (k = j * rpp, lim = k + rpp < column.colcount ? k+rpp : column.colcount; k < lim; k++) {	\
 						oids[oid++] = k;															\
 					}																				\
-				} else if (!(shigh.X <= zonemaps->zmaps[j].min.X || slow.X > zonemaps->zmaps[j].max.X)) {					\
+				} else if (!(shigh.X < zonemaps->zmaps[j].min.X || slow.X >= zonemaps->zmaps[j].max.X)) {					\
 					/* zone maps are inclusive */													\
 					for (k = j * rpp, lim = k + rpp < column.colcount ? k+rpp : column.colcount; k < lim; k++) {	\
 						STATS zcomparisons[i] += 1;													\
-						if (((T*)column.col)[k] < shigh.X && ((T*)column.col)[k] >= slow.X ) {					\
+						if (((T*)column.col)[k] <= shigh.X && ((T*)column.col)[k] > slow.X ) {					\
 							oids[oid++] = k;														\
 						}\
 					} \
@@ -904,7 +904,7 @@ void queries(Column column, Zonemap_index *zonemaps, Imprints_index *imps)
 							} else {											\
 								for (val = ((T*)column.col)[l]; l < lim; l++, val = ((T*)column.col)[l]) {	\
 									STATS icomparisons[i] += 1;					\
-									if (val < shigh.X && val >= slow.X) {		\
+									if (val <= shigh.X && val > slow.X) {		\
 										oids[oid++] = l;						\
 									}											\
 								}												\
@@ -925,7 +925,7 @@ void queries(Column column, Zonemap_index *zonemaps, Imprints_index *imps)
 						} else {												\
 							for (val = ((T*)column.col)[l]; l < lim; l++, val = ((T*)column.col)[l]) {	\
 								STATS icomparisons[i] += 1;						\
-								if (val < shigh.X && val >= slow.X  ) {			\
+								if (val <= shigh.X && val > slow.X  ) {			\
 									oids[oid++] = l;							\
 								}												\
 							}													\
@@ -1045,8 +1045,8 @@ icnt=bcnt=0;
 				for (; icnt < top_icnt; bcnt++, icnt++) {						\
 					if (imprints##B[icnt] & mask) {								\
 						b = bcnt * imps->blocksize;								\
-						top_b = (b + imps->blocksize) > column.colcount ?		\
-						        column.colcount : (b + imps->blocksize);		\
+						top_b = b + imps->blocksize;							\
+						top_b = top_b > column.colcount ? column.colcount : top_b;	\
 						if ((imprints##B[icnt] & ~innermask) == 0) {			\
 							for (; b < top_b; b++) {							\
 								oids[oid++] = b;								\
