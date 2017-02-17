@@ -4,9 +4,6 @@
 #define aligned_alloc(align, n) malloc(n)
 #endif
 
-/* size (in bytes) of supported types as defined by MonetDB */
-int stride[14] = {0,0,0,1,2,0,4,8,0,0,4,8,8,0};
-
 /* auxilary variables used globaly */
 FILE *devnull;
 unsigned long pages;                            /* total pages in the column */
@@ -36,7 +33,7 @@ unsigned long innermask;
 
 /* functions (in call order)-ish */
 Zonemap_index *create_zonemaps(Column *column);
-Imprints_index *scalar_imprints(Column *column);
+Imprints_index *scalar_imprints1(Column *column);
 Imprints_index *simd_imprints(Column *column, int blocksize, Imprints_index *other);
 
 void stats(Column *column, Imprints_index *);
@@ -51,9 +48,11 @@ int main(int argc, char **argv)
 	FILE *cfile;
 	long filesize;
 	size_t rd;
+	int stride[14] = {0,0,0,1,2,0,4,8,0,0,4,8,8,0};
 	Zonemap_index *zonemaps;
 	Imprints_index *scalar_imps;
-	Imprints_index *simd_imps;
+	//Imprints_index *simd_imps;
+	Imprints_index *imps2;
 
 	if (argc != 5) {
 		printf("usage: %s type count file column\n", argv[0]);
@@ -99,6 +98,7 @@ int main(int argc, char **argv)
 		printf("type %s not supported\n", column->typename);
 		return -1;
 	}
+	column->typesize = stride[column->coltype];
 
 	cfile = fopen(column->filename, "r");
 	if (cfile == NULL) {
@@ -165,10 +165,15 @@ int main(int argc, char **argv)
 	/* create zonemaps */
 	zonemaps = create_zonemaps(column);
 	/*create imprints */
-	scalar_imps = scalar_imprints(column);
+	scalar_imps = scalar_imprints1(column);
+
+	imps2 = create_imprints(column, 64, 64, 0);
+
+	//compareImprintsIndex(column,scalar_imps,imps2);
+
 	//PRINT_IMPRINTS printImprint(column, zonemaps);
 	/*create simd_imprints() equal sized as the original imprint */
-	simd_imps = simd_imprints(column, rpp, scalar_imps);
+	//simd_imps = simd_imprints(column, rpp, scalar_imps);
 	//compareImprintsIndex(column,scalar_imps,simd_imps);
 
 	VERBOSE printf("%s tuples=%ld size=%ld(bytes), zonemap_sz=%ld(bytes) %ld%% #zones=%ld, imprints_sz=%ld(bytes) %ld%%,",
@@ -179,7 +184,7 @@ int main(int argc, char **argv)
 	VERBOSE printf(" #imprints=%ld #dict=%ld\n", imps_cnt, dct_cnt);
 
 	/* run queries */
-	queries(column, zonemaps, simd_imps );
+	queries(column, zonemaps, imps2 );
 	//statistics(column);
 
 
@@ -253,13 +258,13 @@ create_zonemaps(Column *column)
 		}
 
 		switch(column->coltype){
-			case TYPE_bte: val.bval  = *(char*)   (column->col + i*stride[column->coltype]); upd(bval); break;
-			case TYPE_sht: val.sval  = *(short *) (column->col + i*stride[column->coltype]); upd(sval); break;
-			case TYPE_int: val.ival  = *(int*)    (column->col + i*stride[column->coltype]); upd(ival); break;
-			case TYPE_lng: val.lval  = *(long*)   (column->col + i*stride[column->coltype]); upd(lval); break;
-			case TYPE_oid: val.ulval = *(unsigned long *) (column->col + i*stride[column->coltype]); upd(ulval); break;
-			case TYPE_flt: val.fval  = *(float*)  (column->col + i*stride[column->coltype]); upd(fval);break;
-			case TYPE_dbl: val.dval  = *(double*) (column->col + i*stride[column->coltype]); upd(dval); break;
+			case TYPE_bte: val.bval  = *(char*)   (column->col + i*column->typesize); upd(bval); break;
+			case TYPE_sht: val.sval  = *(short *) (column->col + i*column->typesize); upd(sval); break;
+			case TYPE_int: val.ival  = *(int*)    (column->col + i*column->typesize); upd(ival); break;
+			case TYPE_lng: val.lval  = *(long*)   (column->col + i*column->typesize); upd(lval); break;
+			case TYPE_oid: val.ulval = *(unsigned long *) (column->col + i*column->typesize); upd(ulval); break;
+			case TYPE_flt: val.fval  = *(float*)  (column->col + i*column->typesize); upd(fval);break;
+			case TYPE_dbl: val.dval  = *(double*) (column->col + i*column->typesize); upd(dval); break;
 		}
 	}
 	if ((i-1)%rpp) zonemaps->zmaps_cnt++;
@@ -271,7 +276,7 @@ create_zonemaps(Column *column)
 }
 
 Imprints_index*
-scalar_imprints(Column *column)
+scalar_imprints1(Column *column)
 {
 	Imprints_index *imps;
 	long i, mask, prevmask;
@@ -345,13 +350,13 @@ do {											\
 			mask = 0;
 		}
 		switch (column->coltype) {
-			case TYPE_bte: val.bval  = *(char*)   (column->col + i*stride[column->coltype]); GETBIT(bit, bval); break;
-			case TYPE_sht: val.sval  = *(short*)  (column->col + i*stride[column->coltype]); GETBIT(bit, sval); break;
-			case TYPE_int: val.ival  = *(int*)    (column->col + i*stride[column->coltype]); GETBIT(bit, ival); break;
-			case TYPE_lng: val.lval  = *(long*)   (column->col + i*stride[column->coltype]); GETBIT(bit, lval); break;
-			case TYPE_oid: val.ulval = *(unsigned long*) (column->col + i*stride[column->coltype]); GETBIT(bit, ulval); break;
-			case TYPE_flt: val.fval  = *(float*)  (column->col + i*stride[column->coltype]); GETBIT(bit, fval); break;
-			case TYPE_dbl: val.dval  = *(double*) (column->col + i*stride[column->coltype]); GETBIT(bit, dval); break;
+			case TYPE_bte: val.bval  = *(char*)   (column->col + i*column->typesize); GETBIT(bit, bval); break;
+			case TYPE_sht: val.sval  = *(short*)  (column->col + i*column->typesize); GETBIT(bit, sval); break;
+			case TYPE_int: val.ival  = *(int*)    (column->col + i*column->typesize); GETBIT(bit, ival); break;
+			case TYPE_lng: val.lval  = *(long*)   (column->col + i*column->typesize); GETBIT(bit, lval); break;
+			case TYPE_oid: val.ulval = *(unsigned long*) (column->col + i*column->typesize); GETBIT(bit, ulval); break;
+			case TYPE_flt: val.fval  = *(float*)  (column->col + i*column->typesize); GETBIT(bit, fval); break;
+			case TYPE_dbl: val.dval  = *(double*) (column->col + i*column->typesize); GETBIT(bit, dval); break;
 			default: bit =0;
 		}
 		mask = setBit(mask, bit);
@@ -401,104 +406,6 @@ do {											\
 	return imps;
 }
 
-#define cmpvalues(X)	\
-static int	\
-cmpvalues##X(const void *p1, const void *p2)\
-{\
-	ValRecord v1 = *(ValRecord *) p1;\
-	ValRecord v2 = *(ValRecord *) p2;\
-	if ( v1.X < v2.X ) return -1; \
-	if ( v1.X > v2.X ) return 1; \
-	return 0;\
-}
-
-cmpvalues(bval);
-cmpvalues(sval);
-cmpvalues(ival);
-cmpvalues(lval);
-cmpvalues(ulval);
-cmpvalues(fval);
-cmpvalues(dval);
-
-void
-binning(Column *column, ValRecord *bounds, int *bins, int max_bins) {
-	ValRecord *sample;
-	unsigned long pos;
-	int i, smp;
-
-
-	sample = (ValRecord *) malloc(sizeof(ValRecord)*SAMPLE_SZ);
-
-#define sampleDistribution(X,T)												\
-	/* draw the sample, */													\
-	for (i = 0; i < SAMPLE_SZ; i++) {										\
-		pos = (rand()*column->colcount)/RAND_MAX;							\
-		sample[i].X = ((T*)column->col)[pos];								\
-	}																		\
-	/* sort the sample and make it unique*/									\
-	qsort((char *) sample, SAMPLE_SZ, sizeof(ValRecord), cmpvalues##X);		\
-	for (smp = 0, i = 1; i < SAMPLE_SZ; i++) {								\
-		if (sample[i].X != sample[smp].X) {									\
-			sample[++smp] = sample[i];										\
-		}																	\
-	}																		\
-	smp++;
-
-	switch(column->coltype){
-	case TYPE_bte:
-		sampleDistribution(bval, char);
-		break;
-	case TYPE_sht:
-		sampleDistribution(sval, short);
-		break;
-	case TYPE_int:
-		sampleDistribution(ival, int);
-		break;
-	case TYPE_lng:
-		sampleDistribution(lval, long);
-		break;
-	case TYPE_oid:
-		sampleDistribution(ulval, unsigned long);
-		break;
-	case TYPE_flt:
-		sampleDistribution(fval, float);
-		break;
-	case TYPE_dbl:
-		sampleDistribution(dval, double);
-	}
-
-	bounds[0] = sample[1];
-	if (smp < max_bins-1) {
-		for (i = 1; i < smp; i++) {
-			bounds[i] = sample[i+1];
-		}
-		if (i<8)              *bins = 8;
-		if (8<=i   && i<16)   *bins = 16;
-		if (16<=i  && i<32)   *bins = 32;
-		if (32<=i  && i<64)   *bins = 64;
-		if (64<=i  && i<128)  *bins = 128;
-		if (128<=i && i<256)  *bins = 256;
-		for (; i < max_bins; i++) {
-			bounds[i] = sample[smp-1];
-		}
-	} else {
-		double y, ystep = (double)smp/(double)(max_bins-1);
-		*bins = 64;
-		for (i = 1, y = ystep; y < smp; y += ystep, i++) {
-			bounds[i] = sample[(int)y];
-		}
-		if (i == max_bins - 2) { /* there is some leftovers */
-			assert (y>=smp);
-			assert ((y-ystep)<smp);
-			bounds[i] = sample[smp-1];
-		}
-	}
-
-	VERBOSE printf("%s binning gives %d unique values from %d and %d bins\n", column->colname, smp, SAMPLE_SZ, *bins);
-
-	return;
-}
-
 void
 stats(Column *column, Imprints_index *imps)
 {
@@ -529,19 +436,6 @@ stats(Column *column, Imprints_index *imps)
 	}
 }
 
-__m256i setbit_256(__m256i x,int k){
-	// constants that will (hopefully) be hoisted out of a loop after inlining  
-	__m256i indices = _mm256_set_epi32(224,192,160,128,96,64,32,0);
-	__m256i one = _mm256_set1_epi32(-1);
-	one = _mm256_srli_epi32(one, 31);    // set1(0x1)
-	__m256i kvec = _mm256_set1_epi32(k);  
-	// if 0<=k<=255 then kvec-indices has exactly one element with a value between 0 and 31
-	__m256i shiftcounts = _mm256_sub_epi32(kvec, indices);
-	__m256i kbit        = _mm256_sllv_epi32(one, shiftcounts);   // shift counts outside 0..31 shift the bit out of the element
-	return _mm256_or_si256(kbit, x);                             // use _mm256_andnot_si256 to unset the k-th bit
-}
-
-
 Imprints_index* simd_imprints(Column *column, int blocksize, Imprints_index *other)
 {
 	Imprints_index *imps;
@@ -566,7 +460,7 @@ Imprints_index* simd_imprints(Column *column, int blocksize, Imprints_index *oth
 	imps->blocksize = blocksize;  /* blocksize is bytes per block */
 
 	/* how many imprints we will need worst case */
-	max_imprints = (column->colcount/(imps->blocksize/stride[column->coltype]))+1;
+	max_imprints = (column->colcount/(imps->blocksize/column->typesize))+1;
 	imps->dct = (Dct *) malloc (sizeof(Dct) * max_imprints);
 	imps->imprints = (char *) malloc (max_imprints*(imps->bins/8));
 
@@ -618,7 +512,7 @@ Imprints_index* simd_imprints(Column *column, int blocksize, Imprints_index *oth
 #define GETBIT_SIMDD(SIMDTYPE) return NULL;
 #define GETBIT_SIMDF(SIMDTYPE) return NULL;
 
-	bsteps = 256 / (stride[column->coltype]*8);
+	bsteps = 256 / (column->typesize*8);
 
 	t0 = usec();
 	/* start creation */
@@ -626,7 +520,7 @@ Imprints_index* simd_imprints(Column *column, int blocksize, Imprints_index *oth
 		__m256i simd_mask = zero;
 
 		for (b = 0; b < imps->blocksize && i < column->colcount; b += bsteps) {
-			__m256i values_v = _mm256_load_si256((__m256i*) (column->col+i*stride[column->coltype]));
+			__m256i values_v = _mm256_load_si256((__m256i*) (column->col+i*column->typesize));
 			__m256i result = zero;
 			switch (column->coltype) {
 				case TYPE_bte: GETBIT_SIMD(epi8); break;
@@ -701,7 +595,7 @@ void queries(Column *column, Zonemap_index *zonemaps, Imprints_index *imps)
 {
 	unsigned long *oids, oid, k, j, lim, n, tf, l;
 	long m;
-	long tuples[REPETITION];
+	unsigned long tuples[REPETITION];
 	long basetime,                 zonetime,                 impstime;
 	long basetimer[REPETITION],    zonetimer[REPETITION],    impstimer[REPETITION];
 	long bindex[REPETITION],       zindex[REPETITION],       iindex[REPETITION];
@@ -730,94 +624,7 @@ void queries(Column *column, Zonemap_index *zonemaps, Imprints_index *imps)
 		genQueryRange(column, imps, i);
 
 		/* simple scan */
-		m   = 0;
-		oid = 0;
-
-		#define simplescan(X,T) \
-			basetime = usec();					\
-			for (k = 0; k < column->colcount; k++) {	\
-				STATS bcomparisons[i] += 1;		\
-				if (((T*)column->col)[k] <= shigh.X && ((T*)column->col)[k] > slow.X ) {\
-					oids[oid++] = k;\
-				}\
-			}
-		switch(column->coltype){
-		case TYPE_bte:
-			simplescan(bval, char);
-			break;
-		case TYPE_sht:
-			simplescan(sval, short);
-			break;
-		case TYPE_int:
-			simplescan(ival, int);
-			break;
-		case TYPE_lng:
-			simplescan(lval, long);
-			break;
-		case TYPE_oid:
-			simplescan(ulval, unsigned long);
-			break;
-		case TYPE_flt:
-			simplescan(fval, float);
-			break;
-		case TYPE_dbl:
-			simplescan(dval, double);
-			break;
-		}
-		basetimer[i] = usec() - basetime;
-		tuples[i] = oid; /* for result error checking */
-		fprintf(devnull, "m = %ld ", m); /* to break compiler optimizations, which may lead to empty loops */
-
-		/* zonesmaps scan */
-		m   = 0;
-		oid = 0;
-		/* watch out, the zones are closed (min,max) intervals */
-		#define zonequery(X,T) \
-			zonetime = usec();					\
-			for (j = 0; j < zonemaps->zmaps_cnt; j++) {		\
-				STATS zindex[i] += 1;			\
-				if (slow.X < zonemaps->zmaps[j].min.X && shigh.X >= zonemaps->zmaps[j].max.X) { /* all qualify */			\
-					for (k = j * rpp, lim = k + rpp < column->colcount ? k+rpp : column->colcount; k < lim; k++) {	\
-						oids[oid++] = k;															\
-					}																				\
-				} else if (!(shigh.X < zonemaps->zmaps[j].min.X || slow.X >= zonemaps->zmaps[j].max.X)) {					\
-					/* zone maps are inclusive */													\
-					for (k = j * rpp, lim = k + rpp < column->colcount ? k+rpp : column->colcount; k < lim; k++) {	\
-						STATS zcomparisons[i] += 1;													\
-						if (((T*)column->col)[k] <= shigh.X && ((T*)column->col)[k] > slow.X ) {					\
-							oids[oid++] = k;														\
-						}\
-					} \
-				}\
-			}
-
-		switch(column->coltype){
-		case TYPE_bte:
-			zonequery(bval,char);
-			break;
-		case TYPE_sht:
-			zonequery(sval,short);
-			break;
-		case TYPE_int:
-			zonequery(ival,int);
-			break;
-		case TYPE_lng:
-			zonequery(lval,long);
-			break;
-		case TYPE_oid:
-			zonequery(ulval,unsigned long);
-			break;
-		case TYPE_flt:
-			zonequery(fval,float);
-			break;
-		case TYPE_dbl:
-			zonequery(dval,double);
-		}
-
-		zonetimer[i] = usec() - zonetime;
-		if (tuples[i] != oid) /* correct result check */
-			printf("%s base %ld zonemap %ld differ\n", column->colname, tuples[i], oid);
-		fprintf(devnull," %ld",m); /* to break compiler optimizations */
+		tuples[i] = simple_scan(column,slow, shigh, &(basetimer[i]));
 
 		/* column imprint filter */
 		n   = 0;
@@ -955,7 +762,7 @@ simd_queries(Column *column, Imprints_index *imps, long results) {
 	//low  = aligned_alloc(32, sizeof(__m256i));
 	//high = aligned_alloc(32, sizeof(__m256i));
 
-	bstep = 256 / (stride[column->coltype]*8); /* how many values we can fit in one simd register */
+	bstep = 256 / (column->typesize*8); /* how many values we can fit in one simd register */
 
 #define SIMD_QUERYBOUNDS(SIMDTYPE, X)					\
 	low  = _mm256_set1_##SIMDTYPE(slow.X);				\
@@ -991,13 +798,13 @@ icnt=bcnt=0;
 							}													\
 						} else {												\
 							for (; b < top_b; b+=bstep) {						\
-								__m256i values_v = _mm256_load_si256((__m256i*) (column->col+b*stride[column->coltype])); \
+								__m256i values_v = _mm256_load_si256((__m256i*) (column->col+b*column->typesize)); \
 								v_idx = _mm256_movemask_epi8(\
 								_mm256_sub_##SIMDTYPE(\
 									_mm256_cmpgt_##SIMDTYPE(values_v, low),	\
 									_mm256_cmpgt_##SIMDTYPE(values_v, high)));	\
 								for (int i = 0; i < imps->blocksize; i++) { \
-									if (v_idx & (1 << (i*stride[column->coltype])) ) oids[oid++] = b + i;\
+									if (v_idx & (1 << (i*column->typesize)) ) oids[oid++] = b + i;\
 								}\
 							}											\
 						}\
@@ -1014,13 +821,13 @@ icnt=bcnt=0;
 							}													\
 						} else {												\
 							for (; b < top_b; b+=bstep) {						\
-								__m256i values_v = _mm256_load_si256((__m256i*) (column->col+b*stride[column->coltype])); \
+								__m256i values_v = _mm256_load_si256((__m256i*) (column->col+b*column->typesize)); \
 								v_idx = _mm256_movemask_epi8(\
 								_mm256_sub_##SIMDTYPE(\
 									_mm256_cmpgt_##SIMDTYPE(values_v, low),	\
 									_mm256_cmpgt_##SIMDTYPE(values_v, high)));	\
 								for (int i = 0; i < imps->blocksize; i++) { \
-									if (v_idx & (1 << (i*stride[column->coltype])) ) oids[oid++] = b + i;\
+									if (v_idx & (1 << (i*column->typesize)) ) oids[oid++] = b + i;\
 								}\
 							}											\
 						}														\

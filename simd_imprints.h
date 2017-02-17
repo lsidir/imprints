@@ -48,7 +48,7 @@
 #define TYPE_lng    12
 #define TYPE_str    13
 
-#define setBit(X,Y)      ((((long)1)<<Y) | ( ~(((long)1)<<Y) & X))
+#define setBit(X,Y)      ((((unsigned long long)1)<<(Y)) | ( ~(((unsigned long long)1)<<(Y)) & (X)))
 #define isSet(X,Y)       (((((unsigned long long)1)<<Y) & X) ? 1 : 0)
 #define COMPRESSION_MASK (~((~((unsigned long) 0))<<(imps->bins)))
 #define getMask(I)       (imps->bins==64?imps->imprints[I]:((((unsigned long) imps->imprints[((I)*imps->bins)/64])>>(((I)%(64/imps->bins))*(imps->bins))) & COMPRESSION_MASK))
@@ -68,6 +68,7 @@ typedef struct {
 	char          colname[1024];
 	char          typename[64];
 	int           coltype;			/* as given by TYPE_* defines	*/
+	int           typesize;			/* size of type in bytes		*/
 	unsigned long colcount;			/* count of values in column	*/
 	char          *col;				/* heap of data					*/
 	ValRecord     min;				/* min value in col				*/
@@ -114,10 +115,15 @@ typedef struct {
 /* function declarations */
 
 void binning(Column *column, ValRecord *bounds, int *bins, int max_bins);
+Imprints_index* create_imprints(Column *column, int blocksize, int max_bins, int simd);
 
 /* utils */
 void isSorted(Column *column);
 long usec();
+__m256i setbit_256(__m256i x,int k);
+
+/* queries */
+unsigned long simple_scan(Column *column, ValRecord low, ValRecord high, long *timer);
 
 /* helper functions */
 void compareImprintsIndex(Column *column, Imprints_index *imps1, Imprints_index *imps2);
