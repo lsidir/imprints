@@ -115,6 +115,10 @@ typedef struct {
 
 void binning(Column *column, ValRecord *bounds, int *bins, int max_bins);
 
+/* utils */
+void isSorted(Column *column);
+long usec();
+
 /* helper functions */
 void compareImprintsIndex(Column *column, Imprints_index *imps1, Imprints_index *imps2);
 void printBounds(Column *column, Imprints_index *imps);
