@@ -797,7 +797,7 @@ icnt=bcnt=0;
 							}													\
 						} else {												\
 							for (; b < top_b; b+=bstep) {						\
-								__m256i values_v = _mm256_load_si256((__m256i*) (column->col+b*stride[column->coltype])); \
+								__m256i values_v = _mm256_load_si256((__m256i*) (column->col+b*column->typesize)); \
 								__m256i v_idx = \
 								_mm256_sub_##SIMDTYPE(\
 									_mm256_cmpgt_##SIMDTYPE(values_v, low),	\
@@ -820,7 +820,7 @@ icnt=bcnt=0;
 							}													\
 						} else {												\
 							for (; b < top_b; b+=bstep) {						\
-								__m256i values_v = _mm256_load_si256((__m256i*) (column->col+b*stride[column->coltype])); \
+								__m256i values_v = _mm256_load_si256((__m256i*) (column->col+b*column->typesize)); \
 								__m256i v_idx = \
 								_mm256_sub_##SIMDTYPE(\
 									_mm256_cmpgt_##SIMDTYPE(values_v, low),	\

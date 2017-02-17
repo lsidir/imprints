@@ -46,91 +46,92 @@ simple_scan(Column *column, ValRecord low, ValRecord high, long *timer)
 }
 
 unsigned long
-imprints_scan(Column *column, Imprints *imps, ValRecord low, ValRecord high, long *timer)
+imprints_scan(Column *column, Imprints_index *imps, ValRecord low, ValRecord high, long *timer)
 {
 	unsigned long i, res_cnt = 0;
 	unsigned long colcnt = column->colcount;
+	unsigned long dcnt, icnt, top_icnt, bcnt, lim;
+	int values_per_block = imps->blocksize/column->typesize;
 
+	dcnt = icnt = bcnt = 0;
 
-	#define impsscan(X,T) {					\
-		T  *restrict col = (T *) column->col;	\
-		T l = low.X;							\
-		T h = high.X;							\
-		for (i = 0; i < colcnt; i++) {			\
-			if (col[i] > l && col[i] <= h) {	\
-				res_cnt++;						\
-			}									\
-		}										\
-		\
-		for (dcnt = 0; dcnt < dct_cnt; dcnt++) {									\
+	#define impsscan(X,T,_T) {							\
+		T  *restrict col = (T *) column->col;			\
+		_T *restrict imprints = (_T *) imps->imprints;	\
+		T l = low.X;									\
+		T h = high.X;									\
+		_T mask = 0, innermask = 0;								\
+		for (i = 0, dcnt = 0; dcnt < imps->dct_cnt; dcnt++) {						\
 			if (imps->dct[dcnt].repeated == 0) {									\
-				for (k = tf + imps->dct[dcnt].blks; tf < k; n++, tf++) {			\
-						if (imprints##B[tf] & mask) {							\
-							register T val;										\
-							l = n * rpp;										\
-							lim = l + rpp;										\
-							lim = lim > column->colcount ? column->colcount: lim;				\
-							if ((imprints##B[tf] & ~innermask) == 0) {			\
-								for (; l < lim; l++) {							\
-									oids[oid++] = l;							\
-								}												\
-							} else {											\
-								for (val = ((T*)column->col)[l]; l < lim; l++, val = ((T*)column->col)[l]) {	\
-									if (val <= shigh.X && val > slow.X) {		\
-										oids[oid++] = l;						\
-									}											\
-								}												\
-							}													\
-						}														\
-					}															\
-			} else { /* repeated mask case */									\
-				if (imprints##B[tf] & mask) {								\
-						register T val;											\
-						l = n * rpp;											\
-						lim = l + rpp * imps->dct[dcnt].blks;						\
-						lim = lim > column->colcount ? column->colcount : lim;					\
-						if ((imprints##B[tf] & ~innermask) == 0) {				\
-							for (; l < lim; l++) {								\
-								oids[oid++] = l;								\
-							}													\
-						} else {												\
-							for (val = ((T*)column->col)[l]; l < lim; l++, val = ((T*)column->col)[l]) {	\
-								if (val <= shigh.X && val > slow.X  ) {			\
-									oids[oid++] = l;							\
-								}												\
-							}													\
-						}														\
-					}															\
-					n += imps->dct[dcnt].blks;										\
-					tf++;														\
-				}\
-			}
+				top_icnt = icnt + imps->dct[dcnt].blks;								\
+				for (; icnt < top_icnt; bcnt++, icnt++) {							\
+					if (imprints[icnt] & mask) {									\
+						i = bcnt * values_per_block;								\
+						lim = i + values_per_block;									\
+						lim = lim > colcnt ? colcnt: lim;							\
+						if ((imprints[icnt] & ~innermask) == 0) {					\
+							res_cnt += values_per_block;							\
+						} else {													\
+							for (; i < lim; i++) {									\
+								if (col[i] > l && col[i] <= h) {					\
+									res_cnt++;										\
+								}													\
+							}														\
+						}															\
+					}																\
+				}																	\
+			} else { /* repeated mask case */										\
+				if (imprints[icnt] & mask) {										\
+					i = bcnt * values_per_block;									\
+					lim = i + values_per_block * imps->dct[dcnt].blks;				\
+					lim = lim > colcnt ? colcnt : lim;								\
+					if ((imprints[icnt] & ~innermask) == 0) {						\
+						res_cnt += values_per_block;								\
+					} else {														\
+						for (; i < lim; i++) {										\
+							if (col[i] > l && col[i] <= h) {						\
+								res_cnt++;											\
+							}														\
+						}															\
+					}																\
+				}																	\
+				bcnt += imps->dct[dcnt].blks;										\
+				icnt++;																\
+			}																		\
+		}																			\
 	}
 
+#define COLTYPE_SWITCH(_T)												\
+	switch(column->coltype){\
+	case TYPE_bte:\
+		impsscan(bval, char,_T);\
+		break;\
+	case TYPE_sht:\
+		impsscan(sval, short,_T);\
+		break;\
+	case TYPE_int:\
+		impsscan(ival, int,_T);\
+		break;\
+	case TYPE_lng:\
+		impsscan(lval, long,_T);\
+		break;\
+	case TYPE_oid:\
+		impsscan(ulval, unsigned long,_T);\
+		break;\
+	case TYPE_flt:\
+		impsscan(fval, float,_T);\
+		break;\
+	case TYPE_dbl:\
+		impsscan(dval, double,_T);\
+		break;\
+	}
 
 	*timer = usec();
-	switch(column->coltype){
-	case TYPE_bte:
-		impsscan(bval, char);
-		break;
-	case TYPE_sht:
-		impsscan(sval, short);
-		break;
-	case TYPE_int:
-		impsscan(ival, int);
-		break;
-	case TYPE_lng:
-		impsscan(lval, long);
-		break;
-	case TYPE_oid:
-		impsscan(ulval, unsigned long);
-		break;
-	case TYPE_flt:
-		impsscan(fval, float);
-		break;
-	case TYPE_dbl:
-		impsscan(dval, double);
-		break;
+	switch (imps->imprintsize) {
+		case 1: COLTYPE_SWITCH(unsigned char); break;
+		case 2: COLTYPE_SWITCH(unsigned short); break;
+		case 4: COLTYPE_SWITCH(unsigned int); break;
+		case 8: COLTYPE_SWITCH(unsigned long); break;
 	}
 	*timer = usec() - *timer;
 	return res_cnt;
