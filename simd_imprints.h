@@ -47,14 +47,11 @@
 #define TYPE_dbl    11
 #define TYPE_lng    12
 #define TYPE_str    13
-/* size (in bytes) of supported types as defined by MonetDB */
-int stride[14] = {0,0,0,1,2,0,4,8,0,0,4,8,8,0};
-
 
 #define setBit(X,Y)      ((((long)1)<<Y) | ( ~(((long)1)<<Y) & X))
-#define isSet(X,Y)       (((((long)1)<<Y) & X) ? 1 : 0)
-#define COMPRESSION_MASK (~((~((unsigned long) 0))<<(bins)))
-#define getMask(I)       (bins==64?imprints[I]:((((unsigned long) imprints[((I)*bins)/BITS])>>(((I)%(BITS/bins))*(bins))) & COMPRESSION_MASK))
+#define isSet(X,Y)       (((((unsigned long long)1)<<Y) & X) ? 1 : 0)
+#define COMPRESSION_MASK (~((~((unsigned long) 0))<<(imps->bins)))
+#define getMask(I)       (imps->bins==64?imps->imprints[I]:((((unsigned long) imps->imprints[((I)*imps->bins)/64])>>(((I)%(64/imps->bins))*(imps->bins))) & COMPRESSION_MASK))
 
 typedef union {
 	char bval;
@@ -94,10 +91,12 @@ typedef struct {
 typedef struct {
 	Dct            *dct;		/* the dictionary structure				*/
 	char           *imprints;	/* the imprint vectors					*/
+	ValRecord      *bounds;		/* the bounds of the binning			*/
 	unsigned long  dct_cnt;		/* count of dictionary entries			*/
 	unsigned long  imps_cnt;	/* count of imprint vector entries		*/
 	int            bins;		/* number of bins						*/
-	int            blocksize;	/* number of values covered per block	*/
+	int            imprintsize;	/* bytes per imprint					*/
+	int            blocksize;	/* bytes per block						*/
 } Imprints_index;
 
 /* Zonemaps */
@@ -114,4 +113,16 @@ typedef struct {
 
 /* function declarations */
 
-void compareImprintsIndex(Column column, Imprints_index *imps1, Imprints_index *imps2);
+void binning(Column *column, ValRecord *bounds, int *bins, int max_bins);
+
+/* helper functions */
+void compareImprintsIndex(Column *column, Imprints_index *imps1, Imprints_index *imps2);
+void printBounds(Column *column, Imprints_index *imps);
+void printMask(char *mask, int byte);
+/*
+void printHistogram(long histo[BITS], char *name);
+void printBins(Column column);
+void printMask(long mask, int limit);
+void printImprint(Column column, Zonemap_index *zonemaps);
+void statistics(Column column);
+*/
