@@ -997,7 +997,6 @@ simd_queries(Column *column, Imprints_index *imps, long results) {
 	unsigned long icnt; /* ictn is an increment for imps_cnt */
 	unsigned long bcnt; /* bctn is an increment for blocks   */
 	unsigned long top_icnt, b, top_b, bstep;
-	unsigned int v_idx;
 
 
 	unsigned long *restrict oids, oid; /* for materializing the result */
@@ -1051,12 +1050,12 @@ icnt=bcnt=0;
 						} else {												\
 							for (; b < top_b; b+=bstep) {						\
 								__m256i values_v = _mm256_load_si256((__m256i*) (column->col+b*stride[column->coltype])); \
-								v_idx = _mm256_movemask_epi8(\
+								__m256i v_idx = \
 								_mm256_sub_##SIMDTYPE(\
 									_mm256_cmpgt_##SIMDTYPE(values_v, low),	\
-									_mm256_cmpgt_##SIMDTYPE(values_v, high)));	\
-								for (int i = 0; i < imps->blocksize; i++) { \
-									if (v_idx & (1 << (i*stride[column->coltype])) ) oids[oid++] = b + i;\
+									_mm256_cmpgt_##SIMDTYPE(values_v, high));	\
+								for (int i = 0; i < bstep; i++) { \
+									if(_mm256_extract_##SIMDTYPE(v_idx, i)) oids[oid++] = b + i; \
 								}\
 							}											\
 						}\
@@ -1074,14 +1073,14 @@ icnt=bcnt=0;
 						} else {												\
 							for (; b < top_b; b+=bstep) {						\
 								__m256i values_v = _mm256_load_si256((__m256i*) (column->col+b*stride[column->coltype])); \
-								v_idx = _mm256_movemask_epi8(\
+								__m256i v_idx = \
 								_mm256_sub_##SIMDTYPE(\
 									_mm256_cmpgt_##SIMDTYPE(values_v, low),	\
-									_mm256_cmpgt_##SIMDTYPE(values_v, high)));	\
-								for (int i = 0; i < imps->blocksize; i++) { \
-									if (v_idx & (1 << (i*stride[column->coltype])) ) oids[oid++] = b + i;\
+									_mm256_cmpgt_##SIMDTYPE(values_v, high));	\
+								for (int i = 0; i < bstep; i++) { \
+									if(_mm256_extract_##SIMDTYPE(v_idx, i)) oids[oid++] = b + i; \
 								}\
-							}											\
+							}												\
 						}														\
 					}															\
 					bcnt += imps->dct[dcnt].blks;									\
