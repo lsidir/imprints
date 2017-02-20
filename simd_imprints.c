@@ -144,7 +144,7 @@ int main(int argc, char **argv)
 	zonemaps = create_zonemaps(column);
 	/*create scalar imprints */
 	scalar_imps = create_imprints(column, 64, 64, 0);
-	//printImprint(column, scalar_imps);
+	printImprint(column, scalar_imps);
 
 	VERBOSE printf("%s tuples=%ld size=%ld(bytes), zonemap_sz=%ld(bytes) %ld%% #zones=%ld, imprints_sz=%ld(bytes) %ld%%,",
 	             column->colname, column->colcount, filesize,

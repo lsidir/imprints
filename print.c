@@ -154,7 +154,7 @@ void printImprint(Column *column, Imprints_index *imps)
 			}
 	}
 
-
+#if 0
 	for (dcnt = 0, icnt = 0; dcnt < imps->dct_cnt; dcnt++) {
 		if (imps->dct[dcnt].repeated == 0) {
 			top_icnt = icnt + imps->dct[dcnt].blks;
@@ -167,6 +167,7 @@ void printImprint(Column *column, Imprints_index *imps)
 			printf(" repeat [%d]\n", imps->dct[dcnt].blks);
 		}
 	}
+#endif
 }
 
 #if 0

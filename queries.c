@@ -56,6 +56,8 @@ imprints_scan(Column *column, Imprints_index *imps, ValRecord low, ValRecord hig
 
 	dcnt = icnt = bcnt = 0;
 
+	printf("values per block %d \n", values_per_block);
+
 	#define impsscan(X,T,_T) {							\
 		T  *restrict col = (T *) column->col;			\
 		_T *restrict imprints = (_T *) imps->imprints;	\
@@ -63,7 +65,9 @@ imprints_scan(Column *column, Imprints_index *imps, ValRecord low, ValRecord hig
 		T h = high.X;									\
 		_T mask = 0, innermask = 0;						\
 		GETBIT_GENERAL(first, low.X, X);				\
+		printf("FIRST = %d\n", first);\
 		GETBIT_GENERAL(last, high.X, X);				\
+		printf("LAST = %d\n", last);\
 		for (i=first; i <= last; i++)					\
 			mask = setBit(mask, i);						\
 		for (i=first+1; i < last; i++)					\
@@ -72,6 +76,7 @@ imprints_scan(Column *column, Imprints_index *imps, ValRecord low, ValRecord hig
 		putchar('\n');\
 		printMask((char *)(&innermask),8);\
 		putchar('\n');\
+		printf("%d[%d]<%d %d<=%d[%d]\n", first, imps->bounds[first],l,h,last,imps->bounds[last]);\
 		for (i = 0, dcnt = 0; dcnt < imps->dct_cnt; dcnt++) {						\
 			if (imps->dct[dcnt].repeated == 0) {									\
 				top_icnt = icnt + imps->dct[dcnt].blks;								\
@@ -81,7 +86,7 @@ imprints_scan(Column *column, Imprints_index *imps, ValRecord low, ValRecord hig
 						lim = i + values_per_block;									\
 						lim = lim > colcnt ? colcnt: lim;							\
 						if ((imprints[icnt] & ~innermask) == 0) {					\
-							res_cnt += values_per_block;							\
+							res_cnt += (lim-i);							\
 						} else {													\
 							for (; i < lim; i++) {									\
 								if (col[i] > l && col[i] <= h) {					\
@@ -97,7 +102,7 @@ imprints_scan(Column *column, Imprints_index *imps, ValRecord low, ValRecord hig
 					lim = i + values_per_block * imps->dct[dcnt].blks;				\
 					lim = lim > colcnt ? colcnt : lim;								\
 					if ((imprints[icnt] & ~innermask) == 0) {						\
-						res_cnt += values_per_block;								\
+						res_cnt += (lim -i);								\
 					} else {														\
 						for (; i < lim; i++) {										\
 							if (col[i] > l && col[i] <= h) {						\
@@ -139,10 +144,10 @@ imprints_scan(Column *column, Imprints_index *imps, ValRecord low, ValRecord hig
 
 	*timer = usec();
 	switch (imps->imprintsize) {
-		case 1: COLTYPE_SWITCH(unsigned char); break;
-		case 2: COLTYPE_SWITCH(unsigned short); break;
-		case 4: COLTYPE_SWITCH(unsigned int); break;
-		case 8: COLTYPE_SWITCH(unsigned long); break;
+		case 1: COLTYPE_SWITCH(uint8_t); break;
+		case 2: COLTYPE_SWITCH(uint16_t); break;
+		case 4: COLTYPE_SWITCH(uint32_t); break;
+		case 8: COLTYPE_SWITCH(uint64_t); break;
 	}
 	*timer = usec() - *timer;
 	return res_cnt;

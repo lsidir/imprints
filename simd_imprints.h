@@ -2,6 +2,7 @@
 #include <assert.h>
 #include <string.h>
 #include <stdlib.h>
+#include <stdint.h>
 #include <sys/time.h>
 #include <time.h>
 #include <math.h>
@@ -48,7 +49,7 @@
 #define TYPE_lng    12
 #define TYPE_str    13
 
-#define setBit(X,Y)      ((((unsigned long long)1)<<(Y)) | ( ~(((unsigned long long)1)<<(Y)) & (X)))
+#define setBit(X,Y)      ((X) | ((unsigned long long) 1 << (Y)))
 #define isSet(X,Y)       (((((unsigned long long)1)<<Y) & X) ? 1 : 0)
 #define COMPRESSION_MASK (~((~((unsigned long) 0))<<(imps->bins)))
 #define getMask(I)       (imps->bins==64?imps->imprints[I]:((((unsigned long) imps->imprints[((I)*imps->bins)/64])>>(((I)%(64/imps->bins))*(imps->bins))) & COMPRESSION_MASK))
@@ -57,7 +58,7 @@
 	do {											\
 		int _i;										\
 		Z = 0;										\
-		for (_i = 1; _i < imps->bins; _i++)			\
+		for (_i = 0; _i < imps->bins-1; _i++)			\
 			Z += (V > imps->bounds[_i].X);		\
 	} while (0)
 

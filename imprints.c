@@ -13,7 +13,7 @@ scalar_imprints(Column *column, Imprints_index *imps)
 	do {											\
 		int _i;										\
 		Z = 0;										\
-		for (_i = 1; _i < imps->bins; _i++)			\
+		for (_i = 0; _i < imps->bins-1; _i++)			\
 			Z += (col[i] > imps->bounds[_i].X);	\
 	} while (0)
 
@@ -200,7 +200,7 @@ binning(Column *column, ValRecord *bounds, int *bins, int max_bins) {
 			bounds[i] = sample[smp-1];
 		}
 	} else {
-		double y, ystep = (double)smp/(double)(max_bins-1);
+		double y, ystep = (double)smp/(double)(max_bins-2);
 		*bins = 64;
 		for (i = 1, y = ystep; y < smp; y += ystep, i++) {
 			bounds[i] = sample[(int)y];
