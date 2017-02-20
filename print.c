@@ -159,11 +159,11 @@ void printImprint(Column *column, Imprints_index *imps)
 		if (imps->dct[dcnt].repeated == 0) {
 			top_icnt = icnt + imps->dct[dcnt].blks;
 			for (; icnt < top_icnt; icnt++) {
-				printMask(imps->imprints[(icnt)*imps->imprintsize], imps->imprintsize);
+				printMask(imps->imprints+(icnt)*imps->imprintsize, imps->imprintsize);
 				putchar('\n');
 			}
 		} else { /* same imprint for imprint[i].blks next blocks */
-			printMask(imps->imprints[(icnt++)*imps->imprintsize], imps->imprintsize);
+			printMask(imps->imprints+(icnt++)*imps->imprintsize, imps->imprintsize);
 			printf(" repeat [%d]\n", imps->dct[dcnt].blks);
 		}
 	}
