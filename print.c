@@ -118,124 +118,58 @@ void printMask(long mask, int limit)
 	for ( j =0; j<limit; j++)
 		printf("%c", isSet(mask,j)?'x':'.');
 }
-
-void printImprint(Column column, Zonemap_index *zonemaps)
+#endif
+void printImprint(Column *column, Imprints_index *imps)
 {
-	int i,j, lzone, blks = 0,tf = 0;
-	unsigned long mask;
-	ValRecord mx,mi;
-	int unique = 0;
+	unsigned long i, dcnt, icnt, top_icnt;
 
-	printf("%s rpp=%d imprint cells %ld zone cells %ld \n", column->colname, rpp, dct_cnt, zonemaps->zmaps_cnt);
-	printf("                 ");
-	for ( j =0; j< bins; j++)
-		printf("%c", j% 10 == 0?'0'+ j/10:'.');
-	printf("\n");
+	printf("%s dct_cnt     %lu\n", column->colname, imps->dct_cnt);
+	printf("%s imps_cnt    %lu\n", column->colname, imps->imps_cnt);
+	printf("%s bins        %d\n", column->colname, imps->bins);
+	printf("%s imprintsize %d (in bytes)\n", column->colname, imps->imprintsize);
+	printf("%s blocksize   %d (in bytes)\n", column->colname, imps->blocksize);
 
-#define findrange(X) \
-	for ( j= lzone+1; j < blks; j++) { \
-		if ( zonemaps->zmaps[j].min.X < mi.X) \
-			mi.X = zonemaps->zmaps[j].min.X; \
-		if ( zonemaps->zmaps[j].max.X > mx.X) \
-			mx.X = zonemaps->zmaps[j].max.X; \
-	}
-
-	for ( i=0; i< dct_cnt; i++) {
-		if (dct_scalar[i].repeated == 0) {
-			for (j=0; j<dct_scalar[i].blks;j++) {
-				mi = zonemaps->zmaps[blks].min;
-				mx = zonemaps->zmaps[blks].max;
-				blks ++;
-				lzone = blks;
-				printf("[ %10d ]   ", blks);
-				mask = getMask(tf);
-				printMask(mask,bins);
-				tf++;
-				switch(column->coltype){
-					case TYPE_bte:
-						printf(" %7d : %d\n", mi.bval,  mx.bval);
-					break;
-					case TYPE_sht:
-						printf(" %7d : %d\n", mi.sval,  mx.sval);
-					break;
-					case TYPE_int:
-						printf(" %7d : %d\n", mi.ival,  mx.ival);
-					break;
-					case TYPE_lng:
-						printf(" %7ld : %ld\n", mi.lval,  mx.lval);
-					break;
-					case TYPE_oid:
-						printf(" %7lu : %lu\n", mi.ulval,  mx.ulval);
-					break;
-					case TYPE_flt:
-						printf(" %9.8f : %9.8f\n", mi.fval,  mx.fval);
-					break;
-					case TYPE_dbl:
-					printf(" %9.8f : %9.8f\n", mi.dval,  mx.dval);
-				}
-			}
-		} else { /* same imprint for imprint[i].blks next blocks */
-			unique++;
-			lzone = blks;
-			mi = zonemaps->zmaps[lzone].min;
-			mx = zonemaps->zmaps[lzone].max;
-			blks += dct_scalar[i].blks;
-			printf("[ %10d ]+  ", blks);
-			mask = getMask(tf);
-			printMask(mask,bins);
-			tf++;
-			switch(column->coltype){
+	for (i = 0; i < imps->bins; i++) {
+		switch(column->coltype){
 			case TYPE_bte:
-				findrange(bval);
-				printf(" %7d : %d\n", mi.bval,  mx.bval);
+				printf(" %lu=|%d| ", i, imps->bounds[i].bval);
 				break;
 			case TYPE_sht:
-				findrange(sval);
-				printf(" %7d : %d\n", mi.sval,  mx.sval);
+				printf(" %lu=|%d| ", i, imps->bounds[i].sval);
 				break;
 			case TYPE_int:
-				findrange(ival);
-				printf(" %7d : %d\n", mi.ival,  mx.ival);
+				printf(" %lu=|%d| ", i, imps->bounds[i].ival);
 				break;
 			case TYPE_lng:
-				findrange(lval);
-				printf(" %7ld : %ld\n", mi.lval,  mx.lval);
+				printf(" %lu=|%ld| ", i, imps->bounds[i].lval);
 				break;
 			case TYPE_oid:
-				findrange(ulval);
-				printf(" %7lu : %lu\n", mi.ulval,  mx.ulval);
+				printf(" %lu=|%lu| ", i, imps->bounds[i].ulval);
 				break;
 			case TYPE_flt:
-				findrange(fval);
-				printf(" %9.8f : %9.8f\n", mi.fval,  mx.fval);
+				printf(" %lu=|%f| ", i, imps->bounds[i].fval);
 				break;
 			case TYPE_dbl:
-				findrange(dval);
-				printf(" %9.8f : %9.8f\n", mi.dval,  mx.dval);
+				printf(" %lu=|%g| ", i, imps->bounds[i].dval);
 			}
+	}
+
+
+	for (dcnt = 0, icnt = 0; dcnt < imps->dct_cnt; dcnt++) {
+		if (imps->dct[dcnt].repeated == 0) {
+			top_icnt = icnt + imps->dct[dcnt].blks;
+			for (; icnt < top_icnt; icnt++) {
+				printMask(imps->imprints[(icnt)*imps->imprintsize], imps->imprintsize);
+				putchar('\n');
+			}
+		} else { /* same imprint for imprint[i].blks next blocks */
+			printMask(imps->imprints[(icnt++)*imps->imprintsize], imps->imprintsize);
+			printf(" repeat [%d]\n", imps->dct[dcnt].blks);
 		}
 	}
-	printBins(column);
-
-	printf("%s histogram summary ", column->colname);
-	i = 0;
-	for ( j=0; j< bins; j++)
-	if ( histogram[j] == 0)  i++;
-		printf(" %d empty cells, bits used %d",i,bins-i);
-	printf("\n%s histogram", column->colname);
-	for ( j=0; j< bins; j++)
-	if( histogram[j])
-		printf("[%d] %ld ", j, histogram[j]);
-	i=0;
-	for ( j=0; j< bins; j++)
-		 i += isSet(globalmask,j);
-	printf("\n%s vectors dct_cnt %ld imps_cnt %ld unique %d bits %d ", column->colname, dct_cnt, imps_cnt, unique, i);
-	for ( j=0; j<= bins; j++)
-		if(vectors[j])
-			printf("[%d] %ld ", j, vectors[j]);
-	printf("\n");
 }
 
+#if 0
 void statistics(Column column)
 {
 	double var = 0, bitvar = 0;

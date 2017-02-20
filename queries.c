@@ -49,6 +49,7 @@ unsigned long
 imprints_scan(Column *column, Imprints_index *imps, ValRecord low, ValRecord high, long *timer)
 {
 	unsigned long i, res_cnt = 0;
+	unsigned long first, last;
 	unsigned long colcnt = column->colcount;
 	unsigned long dcnt, icnt, top_icnt, bcnt, lim;
 	int values_per_block = imps->blocksize/column->typesize;
@@ -60,7 +61,17 @@ imprints_scan(Column *column, Imprints_index *imps, ValRecord low, ValRecord hig
 		_T *restrict imprints = (_T *) imps->imprints;	\
 		T l = low.X;									\
 		T h = high.X;									\
-		_T mask = 0, innermask = 0;								\
+		_T mask = 0, innermask = 0;						\
+		GETBIT_GENERAL(first, low.X, X);				\
+		GETBIT_GENERAL(last, high.X, X);				\
+		for (i=first; i <= last; i++)					\
+			mask = setBit(mask, i);						\
+		for (i=first+1; i < last; i++)					\
+			innermask = setBit(innermask, i);			\
+		printMask((char *)(&mask),8);\
+		putchar('\n');\
+		printMask((char *)(&innermask),8);\
+		putchar('\n');\
 		for (i = 0, dcnt = 0; dcnt < imps->dct_cnt; dcnt++) {						\
 			if (imps->dct[dcnt].repeated == 0) {									\
 				top_icnt = icnt + imps->dct[dcnt].blks;								\
@@ -101,7 +112,7 @@ imprints_scan(Column *column, Imprints_index *imps, ValRecord low, ValRecord hig
 		}																			\
 	}
 
-#define COLTYPE_SWITCH(_T)												\
+#define COLTYPE_SWITCH(_T)\
 	switch(column->coltype){\
 	case TYPE_bte:\
 		impsscan(bval, char,_T);\
@@ -138,56 +149,52 @@ imprints_scan(Column *column, Imprints_index *imps, ValRecord low, ValRecord hig
 }
 
 
-#if 0
-/* zone maps for the future to fix */
-		/* zonesmaps scan */
-		m   = 0;
-		oid = 0;
-		/* watch out, the zones are closed (min,max) intervals */
-		#define zonequery(X,T) \
-			zonetime = usec();					\
-			for (j = 0; j < zonemaps->zmaps_cnt; j++) {		\
-				STATS zindex[i] += 1;			\
-				if (slow.X < zonemaps->zmaps[j].min.X && shigh.X >= zonemaps->zmaps[j].max.X) { /* all qualify */			\
-					for (k = j * rpp, lim = k + rpp < column->colcount ? k+rpp : column->colcount; k < lim; k++) {	\
-						oids[oid++] = k;															\
+
+unsigned long
+zonemaps_scan(Column *column, Zonemap_index *zmaps, ValRecord low, ValRecord high, long *timer)
+{
+	unsigned long i, lim, k, res_cnt = 0;
+
+	#define zonequery(X,T) \
+		for (i = 0; i < zmaps->zmaps_cnt; i++) {		\
+			if (low.X < zmaps->zmaps[i].min.X && high.X >= zmaps->zmaps[i].max.X) { /* all qualify */			\
+					for (k = i * zmaps->zonesize, lim = k + zmaps->zonesize < column->colcount ? k+zmaps->zonesize : column->colcount; k < lim; k++) {	\
+						res_cnt++;															\
 					}																				\
-				} else if (!(shigh.X < zonemaps->zmaps[j].min.X || slow.X >= zonemaps->zmaps[j].max.X)) {					\
+				} else if (!(high.X < zmaps->zmaps[i].min.X || low.X >= zmaps->zmaps[i].max.X)) {					\
 					/* zone maps are inclusive */													\
-					for (k = j * rpp, lim = k + rpp < column->colcount ? k+rpp : column->colcount; k < lim; k++) {	\
-						STATS zcomparisons[i] += 1;													\
-						if (((T*)column->col)[k] <= shigh.X && ((T*)column->col)[k] > slow.X ) {					\
-							oids[oid++] = k;														\
+					for (k = i * zmaps->zonesize, lim = k + zmaps->zonesize < column->colcount ? k+zmaps->zonesize : column->colcount; k < lim; k++) {	\
+						if (((T*)column->col)[k] <= high.X && ((T*)column->col)[k] > low.X ) {					\
+							res_cnt++;														\
 						}\
 					} \
 				}\
 			}
 
-		switch(column->coltype){
-		case TYPE_bte:
-			zonequery(bval,char);
-			break;
-		case TYPE_sht:
-			zonequery(sval,short);
-			break;
-		case TYPE_int:
-			zonequery(ival,int);
-			break;
-		case TYPE_lng:
-			zonequery(lval,long);
-			break;
-		case TYPE_oid:
-			zonequery(ulval,unsigned long);
-			break;
-		case TYPE_flt:
-			zonequery(fval,float);
-			break;
-		case TYPE_dbl:
-			zonequery(dval,double);
-		}
+	*timer = usec();
+	switch(column->coltype){
+	case TYPE_bte:
+		zonequery(bval,char);
+		break;
+	case TYPE_sht:
+		zonequery(sval,short);
+		break;
+	case TYPE_int:
+		zonequery(ival,int);
+		break;
+	case TYPE_lng:
+		zonequery(lval,long);
+		break;
+	case TYPE_oid:
+		zonequery(ulval,unsigned long);
+		break;
+	case TYPE_flt:
+		zonequery(fval,float);
+		break;
+	case TYPE_dbl:
+		zonequery(dval,double);
+	}
 
-		zonetimer[i] = usec() - zonetime;
-		if (tuples[i] != oid) /* correct result check */
-			printf("%s base %ld zonemap %ld differ\n", column->colname, tuples[i], oid);
-		fprintf(devnull," %ld",m); /* to break compiler optimizations */
-#endif
+	*timer = usec() - *timer;
+	return res_cnt;
+}

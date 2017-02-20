@@ -53,6 +53,14 @@
 #define COMPRESSION_MASK (~((~((unsigned long) 0))<<(imps->bins)))
 #define getMask(I)       (imps->bins==64?imps->imprints[I]:((((unsigned long) imps->imprints[((I)*imps->bins)/64])>>(((I)%(64/imps->bins))*(imps->bins))) & COMPRESSION_MASK))
 
+#define GETBIT_GENERAL(Z, V, X)						\
+	do {											\
+		int _i;										\
+		Z = 0;										\
+		for (_i = 1; _i < imps->bins; _i++)			\
+			Z += (V > imps->bounds[_i].X);		\
+	} while (0)
+
 typedef union {
 	char bval;
 	short sval;
@@ -107,8 +115,9 @@ typedef struct {
 } Zonemap;
 
 typedef struct {
-	Zonemap *zmaps;
+	Zonemap       *zmaps;
 	unsigned long zmaps_cnt;
+	int           zonesize; /* bytes per zone */
 } Zonemap_index;
 
 
@@ -117,6 +126,7 @@ typedef struct {
 void binning(Column *column, ValRecord *bounds, int *bins, int max_bins);
 Imprints_index* create_imprints(Column *column, int blocksize, int max_bins, int simd);
 
+
 /* utils */
 void isSorted(Column *column);
 long usec();
@@ -124,11 +134,14 @@ __m256i setbit_256(__m256i x,int k);
 
 /* queries */
 unsigned long simple_scan(Column *column, ValRecord low, ValRecord high, long *timer);
+unsigned long imprints_scan(Column *column, Imprints_index *imps, ValRecord low, ValRecord high, long *timer);
+unsigned long zonemaps_scan(Column *column, Zonemap_index *zmaps, ValRecord low, ValRecord high, long *timer);
 
 /* helper functions */
 void compareImprintsIndex(Column *column, Imprints_index *imps1, Imprints_index *imps2);
 void printBounds(Column *column, Imprints_index *imps);
 void printMask(char *mask, int byte);
+void printImprint(Column *column, Imprints_index *imps);
 /*
 void printHistogram(long histo[BITS], char *name);
 void printBins(Column column);

@@ -19,7 +19,7 @@ scalar_imprints(Column *column, Imprints_index *imps)
 
 #define SCALAR_IMPS(T, _T, X) {																		\
 	T  *restrict col = (T *) column->col;															\
-	_T *restrict imprints = (_T *) imps->imprints;													\
+	_T *imprints = (_T *) imps->imprints;													\
 	_T mask = 0, prevmask = 0;																		\
 	for (i = 0; i < colcnt; i++) {																	\
 		mask = 0;																					\
@@ -108,7 +108,6 @@ create_imprints(Column *column, int blocksize, int max_bins, int simd)
 	imps->imprintsize = imps->bins/8; /* in bytes */
 	imps->imprints    = (char *) aligned_alloc (32, imps->imprintsize * max_imprints);
 
-
 	if (simd) {
 		//return simd_imprints(column, imps);
 		return NULL;
@@ -119,30 +118,6 @@ create_imprints(Column *column, int blocksize, int max_bins, int simd)
 
 	return NULL;
 }
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 #define cmpvalues(X)	\
 static int	\
