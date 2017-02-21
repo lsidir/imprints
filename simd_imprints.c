@@ -16,9 +16,8 @@ long simd_imprints_create_time;
 
 /* functions (in call order)-ish */
 Zonemap_index *create_zonemaps(Column *column);
-Imprints_index *simd_imprints(Column *column, int blocksize, Imprints_index *other);
 
-void queries(Column *column, Zonemap_index *zonemaps, Imprints_index *imps);
+void queries(Column *column, Zonemap_index *zonemaps, Imprints_index *scalar_imps, Imprints_index *simd_imps, Imprints_index **exper_imps);
 void simd_queries(Column *column, Imprints_index *imps, ValRecord low, ValRecord high, long results);
 void genQueryRange(Column *column, Imprints_index *imps, int selectivity, ValRecord *low, ValRecord *high);
 
@@ -161,8 +160,7 @@ int main(int argc, char **argv)
 	exper_imps[7] = create_imprints(column, 256, 128, 1);
 	exper_imps[8] = create_imprints(column, 256, 256, 1);
 	/* run queries */
-	queries(column, zonemaps, scalar_imps);
-
+	queries(column, zonemaps, scalar_imps, simd_imps, exper_imps);
 
 	VERBOSE printf("end of run\n");
 	return 1;
@@ -245,203 +243,64 @@ create_zonemaps(Column *column)
 	return zonemaps;
 }
 
-void queries(Column *column, Zonemap_index *zonemaps, Imprints_index *imps)
+void queries(Column *column, Zonemap_index *zonemaps, Imprints_index *scalar_imps, Imprints_index *simd_imps, Imprints_index **exper_imps)
 {
-	unsigned long *oids, oid;
 	unsigned long res_cnt;
-	long m;
 	unsigned long tuples[REPETITION];
-	long basetimer[REPETITION],    zonetimer[REPETITION],    impstimer[REPETITION];
-	long bindex[REPETITION],       zindex[REPETITION],       iindex[REPETITION];
-	long bcomparisons[REPETITION], zcomparisons[REPETITION], icomparisons[REPETITION];
-	int i;
 	ValRecord low, high;
-
-	oids  = (unsigned long *) malloc(column->colcount * sizeof(unsigned long));
-	oid   = 0;
-	m     = 0;
+	long dummy, basetimer[REPETITION], zonetimer[REPETITION], impstimer[REPETITION], simd_impstimer[REPETITION];
+	int i;
 
 	for (i = 0; i < REPETITION; i++) {
 		tuples[i] = 0;
-		basetimer[i] = impstimer[i] = zonetimer[i] = 0;
-		bindex[i] = iindex[i] = zindex[i] = 0;
-		bcomparisons[i] = icomparisons[i] = zcomparisons[i] = 0;
+		basetimer[i] = impstimer[i] = simd_impstimer[i] = zonetimer[i] = 0;
 	}
 
 	for (i = 0; i < REPETITION; i++) {
-		/* select a random range from the pool, leads to bias to skew data distribution */
-		/* use [slow,shigh) range expression */
-		genQueryRange(column, imps, i, &low, &high);
+		genQueryRange(column, scalar_imps, i, &low, &high);
 
 		/* simple scan */
 		tuples[i] = simple_scan(column, low, high, &(basetimer[i]));
 
 		res_cnt = zonemaps_scan(column, zonemaps, low, high, &(zonetimer[i]));
 		if (tuples[i] != res_cnt) {
-			printf("%s expecting %lu results and got %lu results from zonemaps\n",column->colname, tuples[i], res_cnt);
+			printf("%s expecting %lu results and got %lu results from zonemaps\n", column->colname, tuples[i], res_cnt);
 		}
 
-		res_cnt = imprints_scan(column, imps, low, high, &(impstimer[i]));
+		res_cnt = imprints_scan(column, scalar_imps, low, high, &(impstimer[i]));
 		if (tuples[i] != res_cnt) {
-			printf("%s expecting %lu results and got %lu results from scalar imprints\n",column->colname, tuples[i], res_cnt);
-
+			printf("%s expecting %lu results and got %lu results from scalar imprints\n", column->colname, tuples[i], res_cnt);
 		}
+
+		res_cnt = imprints_scan(column, simd_imps, low, high, &dummy);
+		if (tuples[i] != res_cnt) {
+			printf("%s expecting %lu results and got %lu results from simd imprints run on scalar queries (for debuging)\n", column->colname, tuples[i], res_cnt);
+		}
+
+		res_cnt = imprints_simd_scan(column, simd_imps, low, high, &(simd_impstimer[i]));
+		if (tuples[i] != res_cnt) {
+			printf("%s expecting %lu results and got %lu results from simd imprints\n", column->colname, tuples[i], res_cnt);
+		}
+
 	}
 
-		//simd_queries(column, imps, tuples[i]);
-
-	for (i =0; i< REPETITION; i++) {
-		VERBOSE printf("%s query[%d]=%ld\t selectivity=%2.1f%%\t|\tscan = %ld\timprints = %ld\tzone = %ld\t(usec)\n",
-		       column->colname, i, tuples[i], tuples[i]* 100.0/column->colcount, basetimer[i],
-		       impstimer[i], zonetimer[i]);
-		STATS printf ("bindex %ld bcomparisons %ld zindex %ld zcomparisons %ld iindex %ld icomparisons %ld\n",
-		       bindex[i], bcomparisons[i], zindex[i], zcomparisons[i], iindex[i], icomparisons[i]);
-
-		if (i) {
-			basetimer[0] += basetimer[i];
-			impstimer[0] += impstimer[i];
-			zonetimer[0] += zonetimer[i];
-		}
+	for (i = 0; i < REPETITION; i++) {
+		VERBOSE printf("%s "
+					   "query[%d]=%12ld "
+					   "selectivity=%2.1f%% \t"
+					   "scan = %ld \t"
+					   "zone = %ld \t"
+					   "imprints = %ld \t"
+					   "simd_imprints = %ld "
+					   "(usec)\n",
+					   column->colname,
+					   i, tuples[i],
+					   tuples[i]* 100.0/column->colcount,
+					   basetimer[i],
+					   zonetimer[i],
+					   impstimer[i],
+					   simd_impstimer[i]);
 	}
-}
-
-void
-simd_queries(Column *column, Imprints_index *imps, ValRecord low, ValRecord high, long results) {
-	long simd_impstime = 0;
-	__m256i __m256i_low, __m256i_high;
-	unsigned long dcnt; /* dctn is an increment for dct_cnt  */
-	unsigned long icnt; /* ictn is an increment for imps_cnt */
-	unsigned long bcnt; /* bctn is an increment for blocks   */
-	unsigned long top_icnt, b, top_b, bstep;
-
-
-	unsigned long *restrict oids, oid; /* for materializing the result */
-
-	unsigned long long mask = 0, innermask =0;
-	unsigned char  *imprints8  = (unsigned char *) imps->imprints;
-	unsigned short *imprints16 = (unsigned short *)imps->imprints;
-	unsigned int   *imprints32 = (unsigned int *)  imps->imprints;
-	unsigned long  *imprints64 = (unsigned long *) imps->imprints;
-
-	oids  = (unsigned long *) malloc(column->colcount * sizeof(unsigned long));
-	oid   = 0;
-
-	//simd_bitmasks = (__m256i *) imps->imprints;
-	//low  = aligned_alloc(32, sizeof(__m256i));
-	//high = aligned_alloc(32, sizeof(__m256i));
-
-	bstep = 256 / (column->typesize*8); /* how many values we can fit in one simd register */
-
-#define SIMD_QUERYBOUNDS(SIMDTYPE, X)					\
-	__m256i_low  = _mm256_set1_##SIMDTYPE(low.X);				\
-	__m256i_high = _mm256_set1_##SIMDTYPE(high.X);
-
-	switch (column->coltype) {
-		case TYPE_bte: SIMD_QUERYBOUNDS(epi8, bval); break;
-		case TYPE_sht: SIMD_QUERYBOUNDS(epi16, sval); break;
-		case TYPE_int: SIMD_QUERYBOUNDS(epi32, ival); break;
-		case TYPE_lng: SIMD_QUERYBOUNDS(epi64x, lval); break;
-		case TYPE_oid: SIMD_QUERYBOUNDS(epi64x, ulval); break;
-		case TYPE_flt: SIMD_QUERYBOUNDS(ps, fval); break;
-		case TYPE_dbl: SIMD_QUERYBOUNDS(pd, dval); break;
-		default: return;
-	}
-
-icnt=bcnt=0;
-
-	/* simd imprints queries */
-	#define SIMD_IMPSQUERY(X, T, B, SIMDTYPE)													\
-		simd_impstime = usec();													\
-		for (dcnt = 0; dcnt < imps->dct_cnt; dcnt++) {							\
-			if (imps->dct[dcnt].repeated == 0) {								\
-				top_icnt = icnt + imps->dct[dcnt].blks;						\
-				for (; icnt < top_icnt; bcnt++, icnt++) {						\
-					if (imprints##B[icnt] & mask) {								\
-						b = bcnt * imps->blocksize;								\
-						top_b = b + imps->blocksize;							\
-						top_b = top_b > column->colcount ? column->colcount : top_b;	\
-						if ((imprints##B[icnt] & ~innermask) == 0) {			\
-							for (; b < top_b; b++) {							\
-								oids[oid++] = b;								\
-							}													\
-						} else {												\
-							for (; b < top_b; b+=bstep) {						\
-								__m256i values_v = _mm256_load_si256((__m256i*) (column->col+b*column->typesize)); \
-								__m256i v_idx = \
-								_mm256_sub_##SIMDTYPE(\
-									_mm256_cmpgt_##SIMDTYPE(values_v, __m256i_low),	\
-									_mm256_cmpgt_##SIMDTYPE(values_v, __m256i_high));	\
-								for (int i = 0; i < bstep; i++) { \
-									if(_mm256_extract_##SIMDTYPE(v_idx, i)) oids[oid++] = b + i; \
-								}\
-							}											\
-						}\
-					}															\
-				}																\
-			} else {  /* repeated mask case */									\
-					if (imprints##B[icnt] & mask) {								\
-						b = bcnt * imps->blocksize;										\
-						top_b = b + imps->blocksize * imps->dct[dcnt].blks;					\
-						top_b = top_b > column->colcount ? column->colcount : top_b;	\
-						if ((imprints##B[icnt] & ~innermask) == 0) {			\
-							for (; b < top_b; b++) {								\
-								oids[oid++] = b;								\
-							}													\
-						} else {												\
-							for (; b < top_b; b+=bstep) {						\
-								__m256i values_v = _mm256_load_si256((__m256i*) (column->col+b*column->typesize)); \
-								__m256i v_idx = \
-								_mm256_sub_##SIMDTYPE(\
-									_mm256_cmpgt_##SIMDTYPE(values_v, __m256i_low),	\
-									_mm256_cmpgt_##SIMDTYPE(values_v, __m256i_high));	\
-								for (int i = 0; i < bstep; i++) { \
-									if(_mm256_extract_##SIMDTYPE(v_idx, i)) oids[oid++] = b + i; \
-								}\
-							}												\
-						}														\
-					}															\
-					bcnt += imps->dct[dcnt].blks;									\
-					icnt++;														\
-				}\
-			}
-
-	#define SIMD_BINCHOOSE(X,T,SIMDTYPE)					\
-		switch(imps->bins) {						\
-		case 8:  SIMD_IMPSQUERY(X,T,8,SIMDTYPE); break;	\
-		case 16: SIMD_IMPSQUERY(X,T,16,SIMDTYPE); break;	\
-		case 32: SIMD_IMPSQUERY(X,T,32,SIMDTYPE); break;	\
-		case 64: SIMD_IMPSQUERY(X,T,64,SIMDTYPE); break;	\
-		default: break;						\
-		}
-
-		switch(column->coltype){
-		case TYPE_bte:
-			SIMD_BINCHOOSE(bval,char,epi8);
-			break;
-		case TYPE_sht:
-			SIMD_BINCHOOSE(sval,short,epi16);
-			break;
-		case TYPE_int:
-			SIMD_BINCHOOSE(ival,int,epi32);
-			break;
-		case TYPE_lng:
-			SIMD_BINCHOOSE(lval,long,epi32);
-			break;
-		case TYPE_oid:
-			SIMD_BINCHOOSE(ulval,unsigned long,epi64);
-			break;
-		case TYPE_flt:
-			SIMD_BINCHOOSE(fval,float,epi32);
-			break;
-		case TYPE_dbl:
-			SIMD_BINCHOOSE(dval,double,epi64);
-		}
-
-		simd_impstime = usec() - simd_impstime;
-		printf("%s simd_imprints time = %ld \n", column->colname, simd_impstime );
-		if (results != oid)
-			printf("%s base %ld simd_imprints %ld differ\n", column->colname, results, oid);
-
 }
 
 /* simulate a series of queries */

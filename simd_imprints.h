@@ -136,6 +136,7 @@ __m256i setbit_256(__m256i x,int k);
 /* queries */
 unsigned long simple_scan(Column *column, ValRecord low, ValRecord high, long *timer);
 unsigned long imprints_scan(Column *column, Imprints_index *imps, ValRecord low, ValRecord high, long *timer);
+unsigned long imprints_simd_scan(Column *column, Imprints_index *imps, ValRecord low, ValRecord high, long *timer);
 unsigned long zonemaps_scan(Column *column, Zonemap_index *zmaps, ValRecord low, ValRecord high, long *timer);
 
 /* helper functions */

@@ -139,11 +139,11 @@ simd_imprints(Column *column, Imprints_index *imps)
 	#define GETBIT_SIMDD(SIMDTYPE) return NULL;
 	#define GETBIT_SIMDF(SIMDTYPE) return NULL;
 
-	#define SIMD_IMPS(T, X) {																		\
+	#define SIMD_IMPS(T, X) {																			\
 		T  *restrict col      = (T *) column->col;														\
 		__m256i simd_mask     = zero;																	\
 		__m256i simd_prevmask = zero;																	\
-		__m256i check;																				\
+		__m256i check;																					\
 		for (i = 0; i < colcnt;) {																		\
 			simd_mask = zero;																			\
 			for (int spb = 0; spb < simds_per_block && i < colcnt; spb++) {								\
