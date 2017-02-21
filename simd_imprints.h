@@ -143,6 +143,7 @@ void compareImprintsIndex(Column *column, Imprints_index *imps1, Imprints_index 
 void printBounds(Column *column, Imprints_index *imps);
 void printMask(char *mask, int byte);
 void printImprint(Column *column, Imprints_index *imps);
+void printBits(size_t const size, void const * const ptr);
 /*
 void printHistogram(long histo[BITS], char *name);
 void printBins(Column column);

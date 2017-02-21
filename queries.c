@@ -56,7 +56,6 @@ imprints_scan(Column *column, Imprints_index *imps, ValRecord low, ValRecord hig
 
 	dcnt = icnt = bcnt = 0;
 
-	printf("values per block %d \n", values_per_block);
 
 	#define impsscan(X,T,_T) {							\
 		T  *restrict col = (T *) column->col;			\
@@ -65,18 +64,11 @@ imprints_scan(Column *column, Imprints_index *imps, ValRecord low, ValRecord hig
 		T h = high.X;									\
 		_T mask = 0, innermask = 0;						\
 		GETBIT_GENERAL(first, low.X, X);				\
-		printf("FIRST = %d\n", first);\
 		GETBIT_GENERAL(last, high.X, X);				\
-		printf("LAST = %d\n", last);\
 		for (i=first; i <= last; i++)					\
 			mask = setBit(mask, i);						\
 		for (i=first+1; i < last; i++)					\
 			innermask = setBit(innermask, i);			\
-		printMask((char *)(&mask),8);\
-		putchar('\n');\
-		printMask((char *)(&innermask),8);\
-		putchar('\n');\
-		printf("%d[%d]<%d %d<=%d[%d]\n", first, imps->bounds[first],l,h,last,imps->bounds[last]);\
 		for (i = 0, dcnt = 0; dcnt < imps->dct_cnt; dcnt++) {						\
 			if (imps->dct[dcnt].repeated == 0) {									\
 				top_icnt = icnt + imps->dct[dcnt].blks;								\
@@ -86,7 +78,7 @@ imprints_scan(Column *column, Imprints_index *imps, ValRecord low, ValRecord hig
 						lim = i + values_per_block;									\
 						lim = lim > colcnt ? colcnt: lim;							\
 						if ((imprints[icnt] & ~innermask) == 0) {					\
-							res_cnt += (lim-i);							\
+							res_cnt += (lim-i);										\
 						} else {													\
 							for (; i < lim; i++) {									\
 								if (col[i] > l && col[i] <= h) {					\
