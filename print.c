@@ -154,7 +154,6 @@ void printImprint(Column *column, Imprints_index *imps)
 			}
 	}
 
-#if 0
 	for (dcnt = 0, icnt = 0; dcnt < imps->dct_cnt; dcnt++) {
 		if (imps->dct[dcnt].repeated == 0) {
 			top_icnt = icnt + imps->dct[dcnt].blks;
@@ -167,7 +166,6 @@ void printImprint(Column *column, Imprints_index *imps)
 			printf(" repeat [%d]\n", imps->dct[dcnt].blks);
 		}
 	}
-#endif
 }
 
 #if 0
@@ -225,3 +223,21 @@ void statistics(Column column)
 		column->colname, on, edit, (double)edit/(double)(2*on));
 }
 #endif
+
+void printBits(size_t const size, void const * const ptr)
+{
+    unsigned char *b = (unsigned char*) ptr;
+    unsigned char byte;
+    int i, j;
+
+    for (i=size-1;i>=0;i--)
+    {
+        for (j=7;j>=0;j--)
+        {
+            byte = b[i] & (1<<j);
+            byte >>= j;
+            printf("%c", byte == 0 ? '.' : 'x');
+        }
+    }
+    puts("");
+}

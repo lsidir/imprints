@@ -136,6 +136,7 @@ __m256i setbit_256(__m256i x,int k);
 /* queries */
 unsigned long simple_scan(Column *column, ValRecord low, ValRecord high, long *timer);
 unsigned long imprints_scan(Column *column, Imprints_index *imps, ValRecord low, ValRecord high, long *timer);
+unsigned long imprints_simd_scan(Column *column, Imprints_index *imps, ValRecord low, ValRecord high, long *timer);
 unsigned long zonemaps_scan(Column *column, Zonemap_index *zmaps, ValRecord low, ValRecord high, long *timer);
 
 /* helper functions */
@@ -143,6 +144,7 @@ void compareImprintsIndex(Column *column, Imprints_index *imps1, Imprints_index 
 void printBounds(Column *column, Imprints_index *imps);
 void printMask(char *mask, int byte);
 void printImprint(Column *column, Imprints_index *imps);
+void printBits(size_t const size, void const * const ptr);
 /*
 void printHistogram(long histo[BITS], char *name);
 void printBins(Column column);

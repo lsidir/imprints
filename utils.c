@@ -57,12 +57,12 @@ long usec()
 	return (long) tp.tv_sec * 1000000 + (long) tp.tv_usec;
 }
 
-__m256i setbit_256(__m256i x,int k){
-	// constants that will (hopefully) be hoisted out of a loop after inlining  
+__m256i setbit_256(__m256i x, int k) {
+	// constants that will (hopefully) be hoisted out of a loop after inlining
 	__m256i indices = _mm256_set_epi32(224,192,160,128,96,64,32,0);
 	__m256i one = _mm256_set1_epi32(-1);
 	one = _mm256_srli_epi32(one, 31);    // set1(0x1)
-	__m256i kvec = _mm256_set1_epi32(k);  
+	__m256i kvec = _mm256_set1_epi32(k);
 	// if 0<=k<=255 then kvec-indices has exactly one element with a value between 0 and 31
 	__m256i shiftcounts = _mm256_sub_epi32(kvec, indices);
 	__m256i kbit        = _mm256_sllv_epi32(one, shiftcounts);   // shift counts outside 0..31 shift the bit out of the element

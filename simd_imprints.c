@@ -12,9 +12,8 @@ long simd_imprints_create_time;
 
 /* functions (in call order)-ish */
 Zonemap_index *create_zonemaps(Column *column);
-Imprints_index *simd_imprints(Column *column, int blocksize, Imprints_index *other);
 
-void queries(Column *column, Zonemap_index *zonemaps, Imprints_index *imps);
+void queries(Column *column, Zonemap_index *zonemaps, Imprints_index *scalar_imps, Imprints_index *simd_imps, Imprints_index **exper_imps);
 void simd_queries(Column *column, Imprints_index *imps, ValRecord low, ValRecord high, long results);
 void genQueryRange(Column *column, Imprints_index *imps, int selectivity, ValRecord *low, ValRecord *high);
 
@@ -28,6 +27,8 @@ int main(int argc, char **argv)
 	int stride[14] = {0,0,0,1,2,0,4,8,0,0,4,8,8,0};
 	Zonemap_index *zonemaps;
 	Imprints_index *scalar_imps;
+	Imprints_index *simd_imps;
+	Imprints_index **exper_imps;
 
 	if (argc != 5) {
 		printf("usage: %s type count file column\n", argv[0]);
@@ -67,8 +68,8 @@ int main(int argc, char **argv)
 		column->max.dval = -DBL_MAX;
 	} else if (strcmp(column->typename, "oid") == 0) {
 		column->coltype  = TYPE_oid;
-		column->min.lval = ULONG_MAX;
-		column->max.lval = 0;
+		column->min.ulval = ULONG_MAX;
+		column->max.ulval = 0;
 	} else {
 		printf("type %s not supported\n", column->typename);
 		return -1;
@@ -118,7 +119,7 @@ int main(int argc, char **argv)
 	VERBOSE printf("%s imprint %s "
 	             "filesize %ld "
 	             "type %s %d "
-	             "stride %d "
+	             "typesize %d "
 	             "records %ld "
 	             "pagesize %d "
 	             "sysconf(pagesize) %ld "
@@ -127,7 +128,7 @@ int main(int argc, char **argv)
 	             column->colname, column->filename,
 	             filesize,
 	             column->typename, column->coltype,
-	             stride[column->coltype],
+	             column->typesize,
 	             column->colcount,
 	             PAGESIZE,
 	             sysconf(_SC_PAGESIZE),
@@ -138,28 +139,26 @@ int main(int argc, char **argv)
 	isSorted(column);
 	/* create zonemaps */
 	zonemaps = create_zonemaps(column);
-	/*create scalar imprints */
+	/* create scalar imprints */
 	scalar_imps = create_imprints(column, 64, 64, 0);
-	printImprint(column, scalar_imps);
+	/* create equivelant simd imprints */
+	simd_imps = create_imprints(column, 64, 64, 1);
 
-	VERBOSE printf("%s tuples=%ld size=%ld(bytes), zonemap_sz=%ld(bytes) %ld%% #zones=%ld, imprints_sz=%ld(bytes) %ld%%,",
-	             column->colname, column->colcount, filesize,
-	             zonemaps->zmaps_cnt * 2 * stride[column->coltype], ((long)zonemaps->zmaps_cnt * 2 * stride[column->coltype] * 100) / filesize, zonemaps->zmaps_cnt,
-	             ((long) (scalar_imps->imps_cnt / (BITS/scalar_imps->bins)) * sizeof(long) + scalar_imps->dct_cnt * sizeof(Dct)),
-	             100 * ((long) (scalar_imps->imps_cnt / (BITS/scalar_imps->bins)) * sizeof(long) + scalar_imps->dct_cnt * sizeof(Dct)) / filesize);
-	VERBOSE printf(" #imprints=%ld #dict=%ld\n", scalar_imps->imps_cnt, scalar_imps->dct_cnt);
+	exper_imps = (Imprints_index **)malloc(sizeof(Imprints_index *) * 9);
 
+	exper_imps[0] = create_imprints(column, 64, 64, 1);
+	exper_imps[1] = create_imprints(column, 64, 128, 1);
+	exper_imps[2] = create_imprints(column, 64, 256, 1);
+	exper_imps[3] = create_imprints(column, 128, 64, 1);
+	exper_imps[4] = create_imprints(column, 128, 128, 1);
+	exper_imps[5] = create_imprints(column, 128, 256, 1);
+	exper_imps[6] = create_imprints(column, 256, 64, 1);
+	exper_imps[7] = create_imprints(column, 256, 128, 1);
+	exper_imps[8] = create_imprints(column, 256, 256, 1);
 	/* run queries */
-	queries(column, zonemaps, scalar_imps);
-	//statistics(column);
-
+	queries(column, zonemaps, scalar_imps, simd_imps, exper_imps);
 
 	VERBOSE printf("end of run\n");
-
-	/* before exiting free memory for cleaness */
-	free(column->col);
-	free(zonemaps->zmaps);
-	free(zonemaps);
 	return 1;
 }
 
@@ -240,364 +239,64 @@ create_zonemaps(Column *column)
 	return zonemaps;
 }
 
-Imprints_index* simd_imprints(Column *column, int blocksize, Imprints_index *other)
+void queries(Column *column, Zonemap_index *zonemaps, Imprints_index *scalar_imps, Imprints_index *simd_imps, Imprints_index **exper_imps)
 {
-	Imprints_index *imps;
-	int bsteps;
-	int newmask;
-	long i, e, b, max_imprints;
-
-	/* simd stuff */
-	__m256i *simd_bitmasks;
-	__m256i zero;
-	__m256i bitmasks[256];
-	__m256i *restrict limits;
-
-	char mask[32], prevmask[32];
-	long t0;
-
-
-	imps = (Imprints_index *) malloc (sizeof(Imprints_index));
-	imps->bounds = other->bounds;
-	imps->bins = other->bins;
-	imps->imprintsize = imps->bins/8;
-	imps->blocksize = blocksize;  /* blocksize is bytes per block */
-
-	/* how many imprints we will need worst case */
-	max_imprints = (column->colcount/(imps->blocksize/column->typesize))+1;
-	imps->dct = (Dct *) malloc (sizeof(Dct) * max_imprints);
-	imps->imprints = (char *) malloc (max_imprints*(imps->bins/8));
-
-	imps->dct_cnt = 0;
-	imps->imps_cnt = 0;
-
-
-	simd_bitmasks = (__m256i *) imps->imprints;
-	limits = aligned_alloc(32, imps->bins*sizeof(__m256i));
-
-#define MAKE_LIMITS(SIMDTYPE, X)											\
-	for (int _i = 0; _i < imps->bins; _i++)								\
-		limits[_i] = _mm256_set1_##SIMDTYPE(imps->bounds[_i].X);				\
-
-	switch (column->coltype) {
-		case TYPE_bte: MAKE_LIMITS(epi8, bval); break;
-		case TYPE_sht: MAKE_LIMITS(epi16, sval); break;
-		case TYPE_int: MAKE_LIMITS(epi32, ival); break;
-		case TYPE_lng: MAKE_LIMITS(epi64x, lval); break;
-		case TYPE_oid: MAKE_LIMITS(epi64x, ulval); break;
-		case TYPE_flt: MAKE_LIMITS(ps, fval); break;
-		case TYPE_dbl: MAKE_LIMITS(pd, dval); break;
-		default: return NULL;
-	}
-
-	/* zero simd value */
-	zero = _mm256_setzero_si256();
-	/* simd bitmasks */
-	for (int i = 0; i < 256; i++) {
-		bitmasks[i] = setbit_256(zero, i);
-	}
-
-#define GETBIT_SIMD(SIMDTYPE)																\
-	/* perform 2 bin comparisons per simd instruction until all bins are checked */			\
-		for (int bin1 = 0, bin2 = 1; bin1 < imps->bins-2; bin1+=2, bin2+=2) {				\
-			result = _mm256_add_##SIMDTYPE(result,											\
-						_mm256_add_##SIMDTYPE(												\
-							_mm256_cmpgt_##SIMDTYPE(values_v, limits[bin1]),				\
-							_mm256_cmpgt_##SIMDTYPE(values_v, limits[bin2])));				\
-		}																					\
-		result = _mm256_sub_##SIMDTYPE(zero,result);										\
-		for (int i1 = 0, i2=1; i1 < bsteps-1; i1+=2, i2+=2) {								\
-			simd_mask = _mm256_or_si256(													\
-				_mm256_or_si256(simd_mask, bitmasks[_mm256_extract_##SIMDTYPE(result, i1)]),\
-				_mm256_or_si256(simd_mask, bitmasks[_mm256_extract_##SIMDTYPE(result, i2)])	\
-			);																				\
-		}
-
-#define GETBIT_SIMDD(SIMDTYPE) return NULL;
-#define GETBIT_SIMDF(SIMDTYPE) return NULL;
-
-	bsteps = 256 / (column->typesize*8);
-
-	t0 = usec();
-	/* start creation */
-	for (i = 0; i < column->colcount;) {
-		__m256i simd_mask = zero;
-
-		for (b = 0; b < imps->blocksize && i < column->colcount; b += bsteps) {
-			__m256i values_v = _mm256_load_si256((__m256i*) (column->col+i*column->typesize));
-			__m256i result = zero;
-			switch (column->coltype) {
-				case TYPE_bte: GETBIT_SIMD(epi8); break;
-				case TYPE_sht: GETBIT_SIMD(epi16); break;
-				case TYPE_int: GETBIT_SIMD(epi32); break;
-				case TYPE_lng: GETBIT_SIMD(epi64); break;
-				case TYPE_oid: GETBIT_SIMD(epi64); break;
-				case TYPE_flt: GETBIT_SIMDF(ps); break;
-				case TYPE_dbl: GETBIT_SIMDD(pd); break;
-				default: return NULL;;
-			}
-			i += bsteps;
-		}
-
-		/* simd the prevmask == mask before extract */
-		newmask = 0;
-		for (e = 0; e < imps->imprintsize; e++) {
-			mask[e] = _mm256_extract_epi8(simd_mask, e);
-			if (mask[e] != prevmask[e]) {
-				prevmask[e] = mask[e];
-				newmask = 1;
-			}
-		}
-
-
-		if (!newmask && imps->dct[imps->dct_cnt-1].blks < ((1<<MAXOFFSET)-1)) {
-			if (imps->dct[imps->dct_cnt - 1].repeated == 0) {
-				if (imps->dct[imps->dct_cnt - 1].blks > 1) {
-					imps->dct[imps->dct_cnt - 1].blks--;
-					imps->dct_cnt++;
-					imps->dct[imps->dct_cnt-1].blks = 1;
-				}
-				imps->dct[imps->dct_cnt-1].repeated = 1;
-			}
-			/* same mask as before */
-			imps->dct[imps->dct_cnt - 1].blks++;
-		} else {
-			unsigned long pos = imps->imps_cnt*imps->imprintsize;
-
-			for (e = 0; e < imps->imprintsize; e++)
-				imps->imprints[pos+e] = mask[e];
-			imps->imps_cnt++;
-
-			if (imps->dct_cnt > 0 && imps->dct[imps->dct_cnt - 1].repeated == 0 && imps->dct[imps->dct_cnt-1].blks < ((1<<MAXOFFSET)-1)) {
-				imps->dct[imps->dct_cnt - 1].blks++;
-			} else {
-				imps->dct[imps->dct_cnt].blks = 1;
-				imps->dct[imps->dct_cnt].repeated = 0;
-				imps->dct_cnt++;
-			}
-
-			/*
-			printMask(imps->imprints+(imps->imps_cnt-1)*8, 8);
-			putchar(' ');
-			printMask(other->imprints+(imps->imps_cnt-1)*8, 8);
-			putchar('\n');*/
-		}
-	}
-
-	/* end creation, stop timer */
-	simd_imprints_create_time = usec() - t0;
-
-
-	VERBOSE printf("%s simd_imprints creation time=%ld, %ld usec per thousand values\n", column->colname, simd_imprints_create_time, ((long)simd_imprints_create_time*1000)/column->colcount);
-	VERBOSE printf("%s %ld=%ld %ld=%ld\n", column->colname, other->imps_cnt, imps->imps_cnt, other->dct_cnt, imps->dct_cnt);
-
-	return imps;
-
-}
-
-void queries(Column *column, Zonemap_index *zonemaps, Imprints_index *imps)
-{
-	unsigned long *oids, oid;
 	unsigned long res_cnt;
-	long m;
 	unsigned long tuples[REPETITION];
-	long basetime,                 zonetime,                 impstime;
-	long basetimer[REPETITION],    zonetimer[REPETITION],    impstimer[REPETITION];
-	long bindex[REPETITION],       zindex[REPETITION],       iindex[REPETITION];
-	long bcomparisons[REPETITION], zcomparisons[REPETITION], icomparisons[REPETITION];
-	int i;
 	ValRecord low, high;
-
-	unsigned char  *imprints8  = (unsigned char *) imps->imprints;
-	unsigned short *imprints16 = (unsigned short *)imps->imprints;
-	unsigned int   *imprints32 = (unsigned int *)  imps->imprints;
-	unsigned long  *imprints64 = (unsigned long *) imps->imprints;
-
-	oids  = (unsigned long *) malloc(column->colcount * sizeof(unsigned long));
-	oid   = 0;
-	m     = 0;
+	long dummy, basetimer[REPETITION], zonetimer[REPETITION], impstimer[REPETITION], simd_impstimer[REPETITION];
+	int i;
 
 	for (i = 0; i < REPETITION; i++) {
 		tuples[i] = 0;
-		basetimer[i] = impstimer[i] = zonetimer[i] = 0;
-		bindex[i] = iindex[i] = zindex[i] = 0;
-		bcomparisons[i] = icomparisons[i] = zcomparisons[i] = 0;
+		basetimer[i] = impstimer[i] = simd_impstimer[i] = zonetimer[i] = 0;
 	}
 
 	for (i = 0; i < REPETITION; i++) {
-		/* select a random range from the pool, leads to bias to skew data distribution */
-		/* use [slow,shigh) range expression */
-		genQueryRange(column, imps, i, &low, &high);
+		genQueryRange(column, scalar_imps, i, &low, &high);
 
 		/* simple scan */
 		tuples[i] = simple_scan(column, low, high, &(basetimer[i]));
 
 		res_cnt = zonemaps_scan(column, zonemaps, low, high, &(zonetimer[i]));
 		if (tuples[i] != res_cnt) {
-			printf("%s expecting %lu results and got %lu results from zonemaps\n",column->colname, tuples[i], res_cnt);
+			printf("%s expecting %lu results and got %lu results from zonemaps\n", column->colname, tuples[i], res_cnt);
 		}
 
-		res_cnt = imprints_scan(column, imps, low, high, &(impstimer[i]));
+		res_cnt = imprints_scan(column, scalar_imps, low, high, &(impstimer[i]));
 		if (tuples[i] != res_cnt) {
-			printf("%s expecting %lu results and got %lu results from scalar imprints\n",column->colname, tuples[i], res_cnt);
-
+			printf("%s expecting %lu results and got %lu results from scalar imprints\n", column->colname, tuples[i], res_cnt);
 		}
+
+		res_cnt = imprints_scan(column, simd_imps, low, high, &dummy);
+		if (tuples[i] != res_cnt) {
+			printf("%s expecting %lu results and got %lu results from simd imprints run on scalar queries (for debuging)\n", column->colname, tuples[i], res_cnt);
+		}
+
+		res_cnt = imprints_simd_scan(column, simd_imps, low, high, &(simd_impstimer[i]));
+		if (tuples[i] != res_cnt) {
+			printf("%s expecting %lu results and got %lu results from simd imprints\n", column->colname, tuples[i], res_cnt);
+		}
+
 	}
 
-		//simd_queries(column, imps, tuples[i]);
-
-	for (i =0; i< REPETITION; i++) {
-		VERBOSE printf("%s query[%d]=%ld\t selectivity=%2.1f%%\t|\tscan = %ld\timprints = %ld\tzone = %ld\t(usec)\n",
-		       column->colname, i, tuples[i], tuples[i]* 100.0/column->colcount, basetimer[i],
-		       impstimer[i], zonetimer[i]);
-		STATS printf ("bindex %ld bcomparisons %ld zindex %ld zcomparisons %ld iindex %ld icomparisons %ld\n",
-		       bindex[i], bcomparisons[i], zindex[i], zcomparisons[i], iindex[i], icomparisons[i]);
-
-		if (i) {
-			basetimer[0] += basetimer[i];
-			impstimer[0] += impstimer[i];
-			zonetimer[0] += zonetimer[i];
-		}
+	for (i = 0; i < REPETITION; i++) {
+		VERBOSE printf("%s "
+					   "query[%d]=%12ld "
+					   "selectivity=%2.1f%% \t"
+					   "scan = %ld \t"
+					   "zone = %ld \t"
+					   "imprints = %ld \t"
+					   "simd_imprints = %ld "
+					   "(usec)\n",
+					   column->colname,
+					   i, tuples[i],
+					   tuples[i]* 100.0/column->colcount,
+					   basetimer[i],
+					   zonetimer[i],
+					   impstimer[i],
+					   simd_impstimer[i]);
 	}
-}
-
-void
-simd_queries(Column *column, Imprints_index *imps, ValRecord low, ValRecord high, long results) {
-	long simd_impstime = 0;
-	__m256i __m256i_low, __m256i_high;
-	unsigned long dcnt; /* dctn is an increment for dct_cnt  */
-	unsigned long icnt; /* ictn is an increment for imps_cnt */
-	unsigned long bcnt; /* bctn is an increment for blocks   */
-	unsigned long top_icnt, b, top_b, bstep;
-
-
-	unsigned long *restrict oids, oid; /* for materializing the result */
-
-	unsigned long long mask, innermask;
-	unsigned char  *imprints8  = (unsigned char *) imps->imprints;
-	unsigned short *imprints16 = (unsigned short *)imps->imprints;
-	unsigned int   *imprints32 = (unsigned int *)  imps->imprints;
-	unsigned long  *imprints64 = (unsigned long *) imps->imprints;
-
-	oids  = (unsigned long *) malloc(column->colcount * sizeof(unsigned long));
-	oid   = 0;
-
-	//simd_bitmasks = (__m256i *) imps->imprints;
-	//low  = aligned_alloc(32, sizeof(__m256i));
-	//high = aligned_alloc(32, sizeof(__m256i));
-
-	bstep = 256 / (column->typesize*8); /* how many values we can fit in one simd register */
-
-#define SIMD_QUERYBOUNDS(SIMDTYPE, X)					\
-	__m256i_low  = _mm256_set1_##SIMDTYPE(low.X);				\
-	__m256i_high = _mm256_set1_##SIMDTYPE(high.X);
-
-	switch (column->coltype) {
-		case TYPE_bte: SIMD_QUERYBOUNDS(epi8, bval); break;
-		case TYPE_sht: SIMD_QUERYBOUNDS(epi16, sval); break;
-		case TYPE_int: SIMD_QUERYBOUNDS(epi32, ival); break;
-		case TYPE_lng: SIMD_QUERYBOUNDS(epi64x, lval); break;
-		case TYPE_oid: SIMD_QUERYBOUNDS(epi64x, ulval); break;
-		case TYPE_flt: SIMD_QUERYBOUNDS(ps, fval); break;
-		case TYPE_dbl: SIMD_QUERYBOUNDS(pd, dval); break;
-		default: return;
-	}
-
-icnt=bcnt=0;
-
-	/* simd imprints queries */
-	#define SIMD_IMPSQUERY(X, T, B, SIMDTYPE)													\
-		simd_impstime = usec();													\
-		for (dcnt = 0; dcnt < imps->dct_cnt; dcnt++) {							\
-			if (imps->dct[dcnt].repeated == 0) {								\
-				top_icnt = icnt + imps->dct[dcnt].blks;						\
-				for (; icnt < top_icnt; bcnt++, icnt++) {						\
-					if (imprints##B[icnt] & mask) {								\
-						b = bcnt * imps->blocksize;								\
-						top_b = b + imps->blocksize;							\
-						top_b = top_b > column->colcount ? column->colcount : top_b;	\
-						if ((imprints##B[icnt] & ~innermask) == 0) {			\
-							for (; b < top_b; b++) {							\
-								oids[oid++] = b;								\
-							}													\
-						} else {												\
-							for (; b < top_b; b+=bstep) {						\
-								__m256i values_v = _mm256_load_si256((__m256i*) (column->col+b*column->typesize)); \
-								__m256i v_idx = \
-								_mm256_sub_##SIMDTYPE(\
-									_mm256_cmpgt_##SIMDTYPE(values_v, __m256i_low),	\
-									_mm256_cmpgt_##SIMDTYPE(values_v, __m256i_high));	\
-								for (int i = 0; i < bstep; i++) { \
-									if(_mm256_extract_##SIMDTYPE(v_idx, i)) oids[oid++] = b + i; \
-								}\
-							}											\
-						}\
-					}															\
-				}																\
-			} else {  /* repeated mask case */									\
-					if (imprints##B[icnt] & mask) {								\
-						b = bcnt * imps->blocksize;										\
-						top_b = b + imps->blocksize * imps->dct[dcnt].blks;					\
-						top_b = top_b > column->colcount ? column->colcount : top_b;	\
-						if ((imprints##B[icnt] & ~innermask) == 0) {			\
-							for (; b < top_b; b++) {								\
-								oids[oid++] = b;								\
-							}													\
-						} else {												\
-							for (; b < top_b; b+=bstep) {						\
-								__m256i values_v = _mm256_load_si256((__m256i*) (column->col+b*column->typesize)); \
-								__m256i v_idx = \
-								_mm256_sub_##SIMDTYPE(\
-									_mm256_cmpgt_##SIMDTYPE(values_v, __m256i_low),	\
-									_mm256_cmpgt_##SIMDTYPE(values_v, __m256i_high));	\
-								for (int i = 0; i < bstep; i++) { \
-									if(_mm256_extract_##SIMDTYPE(v_idx, i)) oids[oid++] = b + i; \
-								}\
-							}												\
-						}														\
-					}															\
-					bcnt += imps->dct[dcnt].blks;									\
-					icnt++;														\
-				}\
-			}
-
-	#define SIMD_BINCHOOSE(X,T,SIMDTYPE)					\
-		switch(imps->bins) {						\
-		case 8:  SIMD_IMPSQUERY(X,T,8,SIMDTYPE); break;	\
-		case 16: SIMD_IMPSQUERY(X,T,16,SIMDTYPE); break;	\
-		case 32: SIMD_IMPSQUERY(X,T,32,SIMDTYPE); break;	\
-		case 64: SIMD_IMPSQUERY(X,T,64,SIMDTYPE); break;	\
-		default: break;						\
-		}
-
-		switch(column->coltype){
-		case TYPE_bte:
-			SIMD_BINCHOOSE(bval,char,epi8);
-			break;
-		case TYPE_sht:
-			SIMD_BINCHOOSE(sval,short,epi16);
-			break;
-		case TYPE_int:
-			SIMD_BINCHOOSE(ival,int,epi32);
-			break;
-		case TYPE_lng:
-			SIMD_BINCHOOSE(lval,long,epi32);
-			break;
-		case TYPE_oid:
-			SIMD_BINCHOOSE(ulval,unsigned long,epi64);
-			break;
-		case TYPE_flt:
-			SIMD_BINCHOOSE(fval,float,epi32);
-			break;
-		case TYPE_dbl:
-			SIMD_BINCHOOSE(dval,double,epi64);
-		}
-
-		simd_impstime = usec() - simd_impstime;
-		printf("%s simd_imprints time = %ld \n", column->colname, simd_impstime );
-		if (results != oid)
-			printf("%s base %ld simd_imprints %ld differ\n", column->colname, results, oid);
-
 }
 
 /* simulate a series of queries */
@@ -618,7 +317,6 @@ void genQueryRange(Column *column, Imprints_index *imps, int selectivity, ValRec
 		break;
 	case TYPE_int:
 		setqueryrange(ival);
-		printf("%s range [%d,%d] (%d,%d)\n", column->colname, (*low).ival, (*high).ival, column->min.ival, column->max.ival);
 		break;
 	case TYPE_lng:
 		setqueryrange(lval);

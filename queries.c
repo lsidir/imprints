@@ -56,7 +56,6 @@ imprints_scan(Column *column, Imprints_index *imps, ValRecord low, ValRecord hig
 
 	dcnt = icnt = bcnt = 0;
 
-	printf("values per block %d \n", values_per_block);
 
 	#define impsscan(X,T,_T) {							\
 		T  *restrict col = (T *) column->col;			\
@@ -65,18 +64,11 @@ imprints_scan(Column *column, Imprints_index *imps, ValRecord low, ValRecord hig
 		T h = high.X;									\
 		_T mask = 0, innermask = 0;						\
 		GETBIT_GENERAL(first, low.X, X);				\
-		printf("FIRST = %d\n", first);\
 		GETBIT_GENERAL(last, high.X, X);				\
-		printf("LAST = %d\n", last);\
 		for (i=first; i <= last; i++)					\
 			mask = setBit(mask, i);						\
 		for (i=first+1; i < last; i++)					\
 			innermask = setBit(innermask, i);			\
-		printMask((char *)(&mask),8);\
-		putchar('\n');\
-		printMask((char *)(&innermask),8);\
-		putchar('\n');\
-		printf("%d[%d]<%d %d<=%d[%d]\n", first, imps->bounds[first],l,h,last,imps->bounds[last]);\
 		for (i = 0, dcnt = 0; dcnt < imps->dct_cnt; dcnt++) {						\
 			if (imps->dct[dcnt].repeated == 0) {									\
 				top_icnt = icnt + imps->dct[dcnt].blks;								\
@@ -86,7 +78,7 @@ imprints_scan(Column *column, Imprints_index *imps, ValRecord low, ValRecord hig
 						lim = i + values_per_block;									\
 						lim = lim > colcnt ? colcnt: lim;							\
 						if ((imprints[icnt] & ~innermask) == 0) {					\
-							res_cnt += (lim-i);							\
+							res_cnt += (lim-i);										\
 						} else {													\
 							for (; i < lim; i++) {									\
 								if (col[i] > l && col[i] <= h) {					\
@@ -153,7 +145,128 @@ imprints_scan(Column *column, Imprints_index *imps, ValRecord low, ValRecord hig
 	return res_cnt;
 }
 
+unsigned long
+imprints_simd_scan(Column *column, Imprints_index *imps, ValRecord low, ValRecord high, long *timer)
+{
+	unsigned long i, res_cnt = 0;
+	unsigned long first, last;
+	unsigned long colcnt = column->colcount;
+	unsigned long dcnt, icnt, top_icnt, bcnt, lim;
+	int           values_per_block    = imps->blocksize/column->typesize;
+	int           values_per_simd     = 32/column->typesize;
+	/* simd stuff */
+	__m256i __m256i_low, __m256i_high;
 
+	dcnt = icnt = bcnt = 0;
+
+	#define SIMD_QUERYBOUNDS(SIMDTYPE, X)					\
+	__m256i_low  = _mm256_set1_##SIMDTYPE(low.X);				\
+	__m256i_high = _mm256_set1_##SIMDTYPE(high.X);
+
+	switch (column->coltype) {
+		case TYPE_bte: SIMD_QUERYBOUNDS(epi8, bval); break;
+		case TYPE_sht: SIMD_QUERYBOUNDS(epi16, sval); break;
+		case TYPE_int: SIMD_QUERYBOUNDS(epi32, ival); break;
+		case TYPE_lng: SIMD_QUERYBOUNDS(epi64x, lval); break;
+		case TYPE_oid: SIMD_QUERYBOUNDS(epi64x, ulval); break;
+		case TYPE_flt: SIMD_QUERYBOUNDS(ps, fval); break;
+		case TYPE_dbl: SIMD_QUERYBOUNDS(pd, dval); break;
+		default: break;
+	}
+
+	#define simd_impsscan(X,T,_T,SIMDTYPE) {			\
+		T  *restrict col = (T *) column->col;			\
+		_T *restrict imprints = (_T *) imps->imprints;	\
+		_T mask = 0, innermask = 0;						\
+		GETBIT_GENERAL(first, low.X, X);				\
+		GETBIT_GENERAL(last, high.X, X);				\
+		for (i=first; i <= last; i++)					\
+			mask = setBit(mask, i);						\
+		for (i=first+1; i < last; i++)					\
+			innermask = setBit(innermask, i);			\
+		for (i = 0, dcnt = 0; dcnt < imps->dct_cnt; dcnt++) {						\
+			if (imps->dct[dcnt].repeated == 0) {									\
+				top_icnt = icnt + imps->dct[dcnt].blks;								\
+				for (; icnt < top_icnt; bcnt++, icnt++) {							\
+					if (imprints[icnt] & mask) {									\
+						i = bcnt * values_per_block;								\
+						lim = i + values_per_block;									\
+						lim = lim > colcnt ? colcnt: lim;							\
+						if ((imprints[icnt] & ~innermask) == 0) {					\
+							res_cnt += (lim-i);										\
+						} else {													\
+							for (; i < lim; i+=values_per_simd) {							\
+								__m256i values_v = _mm256_load_si256((__m256i*) (col+i));	\
+								__m256i v_idx =												\
+								_mm256_sub_##SIMDTYPE(										\
+									_mm256_cmpgt_##SIMDTYPE(values_v, __m256i_low),			\
+									_mm256_cmpgt_##SIMDTYPE(values_v, __m256i_high));		\
+								for (int e = 0; e < values_per_simd; e++) {					\
+									if(_mm256_extract_##SIMDTYPE(v_idx, e)) res_cnt++;		\
+								}															\
+							}																\
+						}															\
+					}																\
+				}																	\
+			} else { /* repeated mask case */										\
+				if (imprints[icnt] & mask) {										\
+					i = bcnt * values_per_block;									\
+					lim = i + values_per_block * imps->dct[dcnt].blks;				\
+					lim = lim > colcnt ? colcnt : lim;								\
+					if ((imprints[icnt] & ~innermask) == 0) {						\
+						res_cnt += (lim -i);										\
+					} else {														\
+						for (; i < lim; i+=values_per_simd) {								\
+							__m256i values_v = _mm256_load_si256((__m256i*) (col+i));		\
+							__m256i v_idx =													\
+							_mm256_sub_##SIMDTYPE(											\
+								_mm256_cmpgt_##SIMDTYPE(values_v, __m256i_low),				\
+								_mm256_cmpgt_##SIMDTYPE(values_v, __m256i_high));			\
+							for (int e = 0; e < values_per_simd; e++) {						\
+								if(_mm256_extract_##SIMDTYPE(v_idx, e)) res_cnt++;			\
+							}																\
+						}																	\
+					}																\
+				}																	\
+				bcnt += imps->dct[dcnt].blks;										\
+				icnt++;																\
+			}																		\
+		}																			\
+	}
+
+#define COLTYPE_SWITCH_SIMD(_T)\
+	switch(column->coltype){\
+	case TYPE_bte:\
+		simd_impsscan(bval, char,_T,epi8);\
+		break;\
+	case TYPE_sht:\
+		simd_impsscan(sval, short,_T,epi16);\
+		break;\
+	case TYPE_int:\
+		simd_impsscan(ival, int,_T,epi32);\
+		break;\
+	case TYPE_lng:\
+		simd_impsscan(lval, long,_T,epi64);\
+		break;\
+	case TYPE_oid:\
+		simd_impsscan(ulval, unsigned long,_T,epi64);\
+		break;\
+	case TYPE_flt:\
+		break;\
+	case TYPE_dbl:\
+		break;\
+	}
+
+	*timer = usec();
+	switch (imps->imprintsize) {
+		case 1: COLTYPE_SWITCH_SIMD(uint8_t); break;
+		case 2: COLTYPE_SWITCH_SIMD(uint16_t); break;
+		case 4: COLTYPE_SWITCH_SIMD(uint32_t); break;
+		case 8: COLTYPE_SWITCH_SIMD(uint64_t); break;
+	}
+	*timer = usec() - *timer;
+	return res_cnt;
+}
 
 unsigned long
 zonemaps_scan(Column *column, Zonemap_index *zmaps, ValRecord low, ValRecord high, long *timer)
