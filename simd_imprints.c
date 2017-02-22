@@ -1,9 +1,5 @@
 #include "simd_imprints.h"
 
-#ifdef __APPLE__
-#define aligned_alloc(align, n) malloc(n)
-#endif
-
 /* auxilary variables used globaly */
 FILE *devnull;
 unsigned long pages;                            /* total pages in the column */

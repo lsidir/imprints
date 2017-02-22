@@ -150,3 +150,7 @@ void printMask(long mask, int limit);
 void printImprint(Column column, Zonemap_index *zonemaps);
 void statistics(Column column);
 */
+
+#ifdef __APPLE__
+#define aligned_alloc(align, n) malloc(n)
+#endif
