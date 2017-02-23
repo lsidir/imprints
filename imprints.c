@@ -220,7 +220,7 @@ create_imprints(Column *column, int blocksize, int max_bins, int simd)
 	/* decide the bounds and the number of bins */
 	binning(column, imps->bounds, &(imps->bins), max_bins);
 	imps->imprintsize = imps->bins/8; /* in bytes */
-	imps->imprints    = (char *) aligned_alloc (32, imps->imprintsize * max_imprints);
+	imps->imprints    = (char *) aligned_alloc (32, imps->imprintsize * (max_imprints+32));
 
 	if (simd) {
 		imps = simd_imprints(column, imps);

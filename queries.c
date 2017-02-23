@@ -149,9 +149,10 @@ unsigned long
 imprints_simd_scan(Column *column, Imprints_index *imps, ValRecord low, ValRecord high, long *timer)
 {
 	unsigned long i, res_cnt = 0;
-	unsigned long first, last;
+	unsigned long first = 0, last = 0;
 	unsigned long colcnt = column->colcount;
 	unsigned long dcnt, icnt, top_icnt, bcnt, lim;
+	char          *mask, *innermask;
 	int           v_idx, *p, e;
 	int           values_per_block    = imps->blocksize/column->typesize;
 	int           values_per_simd     = 32/column->typesize;
@@ -165,10 +166,17 @@ imprints_simd_scan(Column *column, Imprints_index *imps, ValRecord low, ValRecor
 		p[i] = 1 << i * column->typesize;
 	}
 
+	mask = (char *) aligned_alloc(32, 32);
+	innermask = (char *) aligned_alloc(32, 32);
+	for (i = 0; i < 32; i++) {
+		mask[i] = innermask[i] = 0;
+	}
 
 	#define SIMD_QUERYBOUNDS(SIMDTYPE, X)					\
-	__m256i_low  = _mm256_set1_##SIMDTYPE(low.X);				\
-	__m256i_high = _mm256_set1_##SIMDTYPE(high.X);
+	__m256i_low  = _mm256_set1_##SIMDTYPE(low.X);			\
+	__m256i_high = _mm256_set1_##SIMDTYPE(high.X);			\
+	GETBIT_GENERAL(first, low.X, X);						\
+	GETBIT_GENERAL(last, high.X, X);
 
 	switch (column->coltype) {
 		case TYPE_bte: SIMD_QUERYBOUNDS(epi8, bval); break;
@@ -181,25 +189,31 @@ imprints_simd_scan(Column *column, Imprints_index *imps, ValRecord low, ValRecor
 		default: break;
 	}
 
-	#define simd_impsscan(X,T,_T,SIMDTYPE) {			\
-		T  *restrict col = (T *) column->col;			\
-		_T *restrict imprints = (_T *) imps->imprints;	\
-		_T mask = 0, innermask = 0;						\
-		GETBIT_GENERAL(first, low.X, X);				\
-		GETBIT_GENERAL(last, high.X, X);				\
-		for (i=first; i <= last; i++)					\
-			mask = setBit(mask, i);						\
-		for (i=first+1; i < last; i++)					\
-			innermask = setBit(innermask, i);			\
+
+	for (i = first; i <= last; i++)
+		mask[i/8] = setBit(mask[i/8], i%8);
+	for (i = first + 1; i < last; i++)
+		innermask[i/8] = setBit(innermask[i/8], i%8);
+	for (i = 0; i < imps->imprintsize; i++) {
+		innermask[i] = ~innermask[i];
+	}
+
+	#define simd_impsscan(X,T,_T,SIMDTYPE) {										\
+		T  *restrict col = (T *) column->col;										\
+		_T *restrict imprints = (_T *) imps->imprints;								\
+		__m256i simd_mask = _mm256_load_si256((__m256i*) mask);						\
+		__m256i simd_innermask = _mm256_load_si256((__m256i*) innermask);			\
+		__m256i current_imprint;													\
 		for (i = 0, dcnt = 0; dcnt < imps->dct_cnt; dcnt++) {						\
 			if (imps->dct[dcnt].repeated == 0) {									\
 				top_icnt = icnt + imps->dct[dcnt].blks;								\
 				for (; icnt < top_icnt; bcnt++, icnt++) {							\
-					if (imprints[icnt] & mask) {									\
+					current_imprint = _mm256_loadu_si256((__m256i *) (imprints+icnt));\
+					if (_mm256_testz_si256(simd_mask, current_imprint) == 0) {		\
 						i = bcnt * values_per_block;								\
 						lim = i + values_per_block;									\
 						lim = lim > colcnt ? colcnt: lim;							\
-						if ((imprints[icnt] & ~innermask) == 0) {					\
+						if (_mm256_testz_si256(simd_innermask, current_imprint)) {	\
 							res_cnt += (lim-i);										\
 						} else {													\
 							for (; i < lim; i+=values_per_simd) {							\
@@ -216,11 +230,12 @@ imprints_simd_scan(Column *column, Imprints_index *imps, ValRecord low, ValRecor
 					}																\
 				}																	\
 			} else { /* repeated mask case */										\
-				if (imprints[icnt] & mask) {										\
+				current_imprint = _mm256_loadu_si256((__m256i *) (imprints+icnt));	\
+				if (_mm256_testz_si256(simd_mask, current_imprint) == 0) {			\
 					i = bcnt * values_per_block;									\
 					lim = i + values_per_block * imps->dct[dcnt].blks;				\
 					lim = lim > colcnt ? colcnt : lim;								\
-					if ((imprints[icnt] & ~innermask) == 0) {						\
+					if (_mm256_testz_si256(simd_innermask, current_imprint)) {		\
 						res_cnt += (lim -i);										\
 					} else {														\
 						for (; i < lim; i+=values_per_simd) {								\

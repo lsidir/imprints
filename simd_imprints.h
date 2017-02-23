@@ -58,8 +58,8 @@
 	do {											\
 		int _i;										\
 		Z = 0;										\
-		for (_i = 0; _i < imps->bins-1; _i++)			\
-			Z += (V > imps->bounds[_i].X);		\
+		for (_i = 0; _i < imps->bins-1; _i++)		\
+			Z += (V > imps->bounds[_i].X);			\
 	} while (0)
 
 typedef union {
