@@ -314,7 +314,7 @@ void queries(Column *column, Zonemap_index *zonemaps, Imprints_index *scalar_imp
 void genQueryRange(Column *column, Imprints_index *imps, int selectivity, ValRecord *low, ValRecord *high)
 {
 #define setqueryrange(X)																\
-	(*low).X = imps->bounds[1].X+(rand() * 1.0 / RAND_MAX * column->max.X);					\
+	(*low).X = imps->bounds[1].X;					\
 	(*high).X = (*low).X + selectivity * column->max.X/ (100.0/REPETITION);;			\
 	if ((*high).X > column->max.X) (*high).X  = column->max.X;							\
 	if ((*low).X > (*high).X) (*low).X = (*high).X;										\
