@@ -272,6 +272,23 @@ void queries(Column *column, Zonemap_index *zonemaps, Imprints_index *scalar_imp
 			printf("%s expecting %lu results and got %lu results from simd imprints\n", column->colname, tuples[i], res_cnt);
 		}
 
+		for (int k = 0; k < 9; k++) {
+			res_cnt = imprints_simd_scan(column, exper_imps[k], low, high, &dummy);
+			printf("%s "
+					   "query[%d]=%12ld "
+					   "selectivity=%2.1f%% \t"
+					   "bins = %d \t"
+					   "blocksize = %d(bytes)\t"
+					   "simd_imprints = %ld"
+					   "(usec)\n",
+					   column->colname,
+					   i, tuples[i],
+					   tuples[i]* 100.0/column->colcount,
+					   exper_imps[k]->bins,
+					   exper_imps[k]->blocksize,
+					   dummy
+					   );
+		}
 	}
 
 	for (i = 0; i < REPETITION; i++) {

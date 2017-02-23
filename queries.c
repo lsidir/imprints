@@ -153,9 +153,11 @@ imprints_simd_scan(Column *column, Imprints_index *imps, ValRecord low, ValRecor
 	unsigned long colcnt = column->colcount;
 	unsigned long dcnt, icnt, top_icnt, bcnt, lim;
 	char          *mask, *innermask;
+	int           impssize = imps->imprintsize;
 	int           v_idx, *p, e;
 	int           values_per_block    = imps->blocksize/column->typesize;
 	int           values_per_simd     = 32/column->typesize;
+	char *restrict imprints = imps->imprints;
 	/* simd stuff */
 	__m256i __m256i_low, __m256i_high;
 
@@ -198,9 +200,8 @@ imprints_simd_scan(Column *column, Imprints_index *imps, ValRecord low, ValRecor
 		innermask[i] = ~innermask[i];
 	}
 
-	#define simd_impsscan(X,T,_T,SIMDTYPE) {										\
+	#define simd_impsscan(X,T,SIMDTYPE) {										\
 		T  *restrict col = (T *) column->col;										\
-		_T *restrict imprints = (_T *) imps->imprints;								\
 		__m256i simd_mask = _mm256_load_si256((__m256i*) mask);						\
 		__m256i simd_innermask = _mm256_load_si256((__m256i*) innermask);			\
 		__m256i current_imprint;													\
@@ -208,7 +209,7 @@ imprints_simd_scan(Column *column, Imprints_index *imps, ValRecord low, ValRecor
 			if (imps->dct[dcnt].repeated == 0) {									\
 				top_icnt = icnt + imps->dct[dcnt].blks;								\
 				for (; icnt < top_icnt; bcnt++, icnt++) {							\
-					current_imprint = _mm256_loadu_si256((__m256i *) (imprints+icnt));\
+					current_imprint = _mm256_loadu_si256((__m256i *) (imprints+(icnt*impssize)));\
 					if (_mm256_testz_si256(simd_mask, current_imprint) == 0) {		\
 						i = bcnt * values_per_block;								\
 						lim = i + values_per_block;									\
@@ -230,7 +231,7 @@ imprints_simd_scan(Column *column, Imprints_index *imps, ValRecord low, ValRecor
 					}																\
 				}																	\
 			} else { /* repeated mask case */										\
-				current_imprint = _mm256_loadu_si256((__m256i *) (imprints+icnt));	\
+				current_imprint = _mm256_loadu_si256((__m256i *) (imprints+(icnt*impssize)));	\
 				if (_mm256_testz_si256(simd_mask, current_imprint) == 0) {			\
 					i = bcnt * values_per_block;									\
 					lim = i + values_per_block * imps->dct[dcnt].blks;				\
@@ -256,35 +257,27 @@ imprints_simd_scan(Column *column, Imprints_index *imps, ValRecord low, ValRecor
 		}																			\
 	}
 
-#define COLTYPE_SWITCH_SIMD(_T)\
-	switch(column->coltype){\
-	case TYPE_bte:\
-		simd_impsscan(bval, char,_T,epi8);\
-		break;\
-	case TYPE_sht:\
-		simd_impsscan(sval, short,_T,epi16);\
-		break;\
-	case TYPE_int:\
-		simd_impsscan(ival, int,_T,epi32);\
-		break;\
-	case TYPE_lng:\
-		simd_impsscan(lval, long,_T,epi64);\
-		break;\
-	case TYPE_oid:\
-		simd_impsscan(ulval, unsigned long,_T,epi64);\
-		break;\
-	case TYPE_flt:\
-		break;\
-	case TYPE_dbl:\
-		break;\
-	}
-
 	*timer = usec();
-	switch (imps->imprintsize) {
-		case 1: COLTYPE_SWITCH_SIMD(uint8_t); break;
-		case 2: COLTYPE_SWITCH_SIMD(uint16_t); break;
-		case 4: COLTYPE_SWITCH_SIMD(uint32_t); break;
-		case 8: COLTYPE_SWITCH_SIMD(uint64_t); break;
+	switch(column->coltype){
+	case TYPE_bte:
+		simd_impsscan(bval, char,epi8);
+		break;
+	case TYPE_sht:
+		simd_impsscan(sval, short,epi16);
+		break;
+	case TYPE_int:
+		simd_impsscan(ival, int,epi32);
+		break;
+	case TYPE_lng:
+		simd_impsscan(lval, long,epi64);
+		break;
+	case TYPE_oid:
+		simd_impsscan(ulval, unsigned long,epi64);
+		break;
+	case TYPE_flt:
+		break;
+	case TYPE_dbl:
+		break;
 	}
 	*timer = usec() - *timer;
 	return res_cnt;
