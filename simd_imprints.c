@@ -1,7 +1,6 @@
 #include "simd_imprints.h"
 
 /* auxilary variables used globaly */
-FILE *devnull;
 unsigned long pages;                            /* total pages in the column */
 int rpp;                                        /* rows per page */
 
@@ -99,11 +98,6 @@ int main(int argc, char **argv)
 		return -1;
 	}
 	fclose(cfile);
-	devnull = fopen("/dev/null","a");
-	if (devnull == NULL){
-		printf("can not open /dev/null\n");
-		return -1;
-	}
 
 	rpp = PAGESIZE/stride[column->coltype];
 	if (rpp == 0) {

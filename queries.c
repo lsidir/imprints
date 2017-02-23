@@ -152,12 +152,19 @@ imprints_simd_scan(Column *column, Imprints_index *imps, ValRecord low, ValRecor
 	unsigned long first, last;
 	unsigned long colcnt = column->colcount;
 	unsigned long dcnt, icnt, top_icnt, bcnt, lim;
+	int           v_idx, *p, e;
 	int           values_per_block    = imps->blocksize/column->typesize;
 	int           values_per_simd     = 32/column->typesize;
 	/* simd stuff */
 	__m256i __m256i_low, __m256i_high;
 
 	dcnt = icnt = bcnt = 0;
+
+	p = (int *) malloc(sizeof(int) * values_per_simd);
+	for (i = 0; i < values_per_simd; i++) {
+		p[i] = 1 << i * column->typesize;
+	}
+
 
 	#define SIMD_QUERYBOUNDS(SIMDTYPE, X)					\
 	__m256i_low  = _mm256_set1_##SIMDTYPE(low.X);				\
@@ -197,12 +204,12 @@ imprints_simd_scan(Column *column, Imprints_index *imps, ValRecord low, ValRecor
 						} else {													\
 							for (; i < lim; i+=values_per_simd) {							\
 								__m256i values_v = _mm256_load_si256((__m256i*) (col+i));	\
-								__m256i v_idx =												\
+								v_idx = _mm256_movemask_epi8(								\
 								_mm256_sub_##SIMDTYPE(										\
 									_mm256_cmpgt_##SIMDTYPE(values_v, __m256i_low),			\
-									_mm256_cmpgt_##SIMDTYPE(values_v, __m256i_high));		\
-								for (int e = 0; e < values_per_simd; e++) {					\
-									if(_mm256_extract_##SIMDTYPE(v_idx, e)) res_cnt++;		\
+									_mm256_cmpgt_##SIMDTYPE(values_v, __m256i_high)));		\
+								for (e = 0; e < values_per_simd; e++) {						\
+									res_cnt += ((v_idx & p[e]) != 0);						\
 								}															\
 							}																\
 						}															\
@@ -218,12 +225,12 @@ imprints_simd_scan(Column *column, Imprints_index *imps, ValRecord low, ValRecor
 					} else {														\
 						for (; i < lim; i+=values_per_simd) {								\
 							__m256i values_v = _mm256_load_si256((__m256i*) (col+i));		\
-							__m256i v_idx =													\
+							v_idx = _mm256_movemask_epi8(									\
 							_mm256_sub_##SIMDTYPE(											\
 								_mm256_cmpgt_##SIMDTYPE(values_v, __m256i_low),				\
-								_mm256_cmpgt_##SIMDTYPE(values_v, __m256i_high));			\
+								_mm256_cmpgt_##SIMDTYPE(values_v, __m256i_high)));			\
 							for (int e = 0; e < values_per_simd; e++) {						\
-								if(_mm256_extract_##SIMDTYPE(v_idx, e)) res_cnt++;			\
+								res_cnt += ((v_idx & p[e]) != 0);							\
 							}																\
 						}																	\
 					}																\
