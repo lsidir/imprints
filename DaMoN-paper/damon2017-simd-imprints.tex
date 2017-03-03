@@ -1,0 +1,378 @@
+\documentclass[sigconf]{acmart}
+
+%\usepackage{booktabs} % For formal tables
+\usepackage{listings}
+\usepackage{todonotes}
+
+
+% Copyright
+%\setcopyright{none}
+%\setcopyright{acmcopyright}
+%\setcopyright{acmlicensed}
+\setcopyright{rightsretained}
+%\setcopyright{usgov}
+%\setcopyright{usgovmixed}
+%\setcopyright{cagov}
+%\setcopyright{cagovmixed}
+
+
+% DOI
+\acmDOI{10.475/123_4}
+
+% ISBN
+\acmISBN{123-4567-24-567/08/06}
+
+%Conference
+\acmConference[DaMoN 2017]{Thirteenth International Workshop on Data Management on New Hardware}{May 2017}{Chicago, USA} 
+\acmYear{2017}
+\copyrightyear{2017}
+
+\acmPrice{0.00}
+
+
+\begin{document}
+\title{Scaling Column Imprints using Advanced Vectorization}
+
+\author{Lefteris Sidirourgos}
+\affiliation{%
+  \institution{ETH Zurich}  
+  \streetaddress{Switzerland}
+}
+\email{lsidir@inf.ethz.ch}
+
+\author{Hannes M\"uhleisen}
+\affiliation{%
+  \institution{Centrum Wiskunde \& Informatica}
+  \streetaddress{Amsterdam, The Netherlands}
+}
+\email{hannes@cwi.nl}
+
+\lstset{basicstyle=\ttfamily}
+
+
+\begin{abstract}
+Column Imprints is a pre-filtering secondary index for answering range queries. The main feature of column imprints is that they are lightweight and are based on compressed bit-vectors, one per cacheline, that quickly determine if the values in that cacheline satisfy the predicates of a query. The main overhead of imprints implementation is many sequential value comparisons against the boundaries of a virtual equi-height histogram, and also during query scans to identify false positives. In this paper, we speed-up the process of imprints creation and quering by using advanced vectorization techniques. We also experimentally explore the benefits of scaling up imprints to larger bit-vector sizes and blocks of data, using 256-bit SIMD registers. Our findings are very promising for both imprints and for future index design research that would employ advanced vectorization techniques and larger (512-bit) and more (32) SIMD registers.
+
+\end{abstract}
+
+\begin{CCSXML}
+<ccs2012>
+<concept>
+<concept_id>10002951.10002952.10003190.10003192</concept_id>
+<concept_desc>Information systems~Database query processing</concept_desc>
+<concept_significance>500</concept_significance>
+</concept>
+<concept>
+<concept_id>10002951.10002952.10002971.10003450.10010828</concept_id>
+<concept_desc>Information systems~Data scans</concept_desc>
+<concept_significance>500</concept_significance>
+</concept>
+</ccs2012>
+\end{CCSXML}
+
+\ccsdesc[500]{Information systems ~ Database query processing}
+\ccsdesc[500]{Information systems ~ Data scans}
+
+
+%\keywords{ACM proceedings, \LaTeX, text tagging}
+
+
+\maketitle
+
+\section{Introduction}
+
+{\em Column Imprints}~\cite{DBLP:conf/sigmod/SidirourgosK13} is a secondary index
+for answering range queries in a read
+optimized columnar database. Imprints are pre-filtering bit-vectors that quickly
+determine if a cache line or block of data contains values that satisfy the range
+predicates of a query. They have been designed such that they are easy to 
+build, even as a side effect of the first range-scan query, and then subsequently used by all other queries. The imprints index structure is simple and lightweight, never exceeding 12\% of 
+the original size of the column, while speeding up significantly query execution 
+times. Column Imprints are particularly useful for those attributes that are on the 
+tail of a relational table, not worth the investment of building a primary (sort) 
+index, yet often part of the many range predicates of a query.
+
+{\em Column Imprints} are so efficient because they are built with a single 
+sequential scan, where each value is compared against a number of boundaries of a equi-height histogram, in order to set the corresponding bit on a vector. Similarly, during query time, only a single sequential scan is needed over the bit-vectors to quickly determine which blocks of data qualify for query evaluation. With this simple description of column imprints creation and usage is 
+easy to imagine that a vectorized programming framework with native CPU support 
+will greatly benefit the performance of the imprints index.
+
+In this paper we make use of Intel's Advanced Vector Extensions 
+\cite{IntelManual2011} to speed up Column Imprints. SIMD instructions are used 
+{\em i)} to efficiently compare multiple values against histogram boundaries, {\em ii)} to perform multiple bit-wise operations over bit-vectors that extend beyond the
+standard 64-bit unsigned long words, and {\em iii)} to filter out false positive 
+values at query time. These three points are the computation intensive parts of the 
+creation and query process of the index, and are exactly the ones that should be 
+optimized by vectorization. As we will describe in detail in the next section, 
+column imprints also employ compression techniques and dictionary-style bookkeeping,
+but these parts of the code are more rare and have many control-flow branching 
+making them unsuited for SIMD optimization.
+
+The scalar design of imprints is also constrained by two additional important 
+factors. First, the size of the bit-vector per cache line can not exceed 64-bits in 
+order to achieve word alignment in the CPU registers. A larger bit-vector will break
+the bit-wise operations into more than one register and thus the process will become
+slower. Second, each imprint (i.e., each 64-bit vector) encodes the values that fit
+in one cacheline (typically 64 bytes). This is optimal, because column imprints is a
+cache conscious index that avoids loading entire cachelines into L1 cache memory if 
+the pre-filtering stage determines so. Any data block larger than a cacheline will 
+achieve worse false positive ratios since it will set more bits in the limited 
+64-bit vector, and will also achieve less than optimal data loading/streaming in the
+CPU cache.
+
+The aforementioned limitations can be easily overcome with the use of SIMD 
+registers that extend beyond 128- to 256- or even (in the very near future) to 512- 
+bits. With bigger imprint bit-vector sizes, more values can be encoded and thus 
+bigger than a cacheline data blocks can be used. In addition, loading data into 
+multiple SIMD registers (16 registers currently, but soon to be increased to 32) 
+allows for value comparisons in higher rates and bigger data blocks. In this work, 
+we extend imprints up to 256-bits, and data blocks to 256 bytes.  
+
+The Instruction Set Extensions Programming Reference~\cite{IntelManual2011} states that 
+``Intel AVX is designed to support 512 [...] bits in the future.''. This future has 
+now arrived, the newer 2016 version of the manual~\cite{IntelManual2016} describes 
+the new instruction sets for AVX-512 and lists future CPUs that will support 
+it, including the Xeon Phi 2 which is already available. The AVX-512 instruction set has been long awaited, and many research in database engines design concludes with 
+future work on 512-bit long registers~\cite{DBLP:journals/pvldb/KimSCKNBLSD09}. We 
+also anticipate this new hardware, and we are planning to extend imprints to use 
+512-bit vectors and 512 byte blocks per imprint.
+
+In this work, apart from the important work of designing the SIMD version of the 
+scalar implementation of column imprints, we also explore the research question of
+how good imprints scale with larger bit-vectors and data blocks. Given that we only 
+have at our disposal a CPU with the AVX-2 256-bit instruction set, we performed 
+extensive experiments up to the 256-bit mark, and used our findings to project in the 
+near future of the AVX-512 instruction set.
+
+To recap, in this paper we make the following contributions:
+\begin{itemize}
+    \item We investigate how modern wide, vectorized instructions can improve performance to lightweight indexing structures such as column imprints.
+    \item We present a SIMD enables re-implementation of the scalar code of column imprints based on Advanced Vector Extensions (AVX-2). The implementation is available as Open Source through a GitHub repository~\footnote{https://github.com/lsidir/simd\_imprints}.
+    \item We perform an extensive experimental evaluation of our implementation on a modern processor and project our finding to the upcoming AVX-512.
+\end{itemize}
+
+We conclude our work with few thoughts on native SIMD index design versus 
+adapting existing indexes to a vectorized version. A new line of research might be 
+possible, where vectorization is not an added benefit on top of a scalar implementation but an integral part of the index design. 
+
+The remainder of this paper is structured as follows: In Section~\ref{sec:imprints} we give an overview of the main design concepts behind the column imprints index. We continue with explaining the vectorized version of imprint construction and querying (Section~\ref{sec:concept}). Then, Section~\ref{sec:experiments} presents experimental results of a prototype implementation on thousands of data columns. Finally, Section~\ref{sec:conclusion} discusses results, research outlook, and future work.
+
+\section{Column Imprints}\label{sec:imprints}
+
+A column imprint is a cache conscious secondary indexing structure suitable for
+both low and high cardinality columns. Given a column with values from
+domain $\mathbf{D}$, an imprint index is constructed by first deriving a small
+sample to approximate a histogram of a few (typically 64 or less) equal-height
+bins. The entire column is then scanned, and for every cacheline of data, a bit-vector is created. The bits in each bit-vector correspond to the bins of the histogram. A bit is set if at least one value in the cacheline falls into
+the corresponding bin. The resulting bit-vector is an imprint of the
+current cacheline that describes which buckets of the approximated
+histogram the values of the cacheline fall into. An imprint vector does not
+have only one bit set per position, but as many bits as are needed
+to map all distinct values of a cacheline. The collection of
+all the resulting bit vectors form a unique column imprint. Consequently,
+by examining an imprint of a column, the execution engine 
+can decide -- in a cacheline granularity -- which parts of the column
+data are relevant to the query predicates, and only then fetch them
+for further processing. Contrary to previous work, a column imprint is a
+non-dense bit indexing scheme, i.e., only one bit is set for all equal values
+in a cacheline, instead of the traditional approaches of bitmaps where each
+data point is always mapped to a different bit.
+
+To reduce the memory footprint of a column imprint, a simple but powerful compression scheme is used. Consecutive and identical bit-vectors (imprints)
+are compressed together and annotated with a counter. This compression exploits
+the empirical observation that data suitable for secondary indexing
+exhibits, in the cacheline level, some degree of clustering or partial
+ordering. Column imprints are designed such that any clustering or partial
+ordering is naturally exploited without the need for extra parameterisation. 
+
+\section{Vectorized Column Imprints}\label{sec:concept}
+
+For completeness of the presentation in this paper we include a portion of the scalar implementation of the imprints index as described in \cite{DBLP:conf/sigmod/SidirourgosK13} \footnote{we refer the reader to the original paper for a detailed description of the algorithms and the implementation design.}.
+This work is about substituting these critical snippets of code in the imprints creation and
+querying algorithms in order to enable advanced vectorization optimizations.  
+
+The performance-critical part of imprint creation is the histogram bin assignment for each value from the column data. Especially for wide imprints, it seems intuitive to implement non-recursive binary search in the histogram boundary array to determine the correct bin. However, the large amount of branching required makes this solution slower than a ``brute-force'' approach, where all boundaries \texttt{l} are checked against the input value regardless of outcome and all comparison results are summed up. The result is the bucket index \texttt{b} of the respective value \texttt{v}. The following pseudo-code illustrates this approach:
+
+\begin{lstlisting}[language=c]
+int b = 0;
+for (int i; i < n_l; i++)
+  b += v > l[i];
+\end{lstlisting}
+
+Vectorization of this approach is straightforward, depending on the input value type width (8, 16, 32 or 64 bits), we can ask the CPU to perform many (up to 64 for AVX-512) value-to-limit comparisons in a single SIMD instruction. This works because AVX comparison operators, for example \texttt{\_mm256\_cmpgt\_epi32} will return a vector where each element is set to \texttt{-1} for which the comparison evaluated to ``true''. Those result vectors can be summed up to yield the bin boundary index.
+
+To illustrate this method, consider the following example: We assume 256-Bit SIMD instructions, 32-bit integer input values, 4-bit imprints, and 8 values per imprint. The histogram boundaries in this example are 12, 23, 51 and 70. In a preparatory step, we compute SIMD vectors for all boundaries where all vector entries are set to the boundary value and store them in an array of vectors, \texttt{L}\footnote{We use uppercase variable names for SIMD vectors.}. This was found to be faster than creating the limits vector ad-hoc at the expense of some additional memory use. 
+
+Then, the vectorized bin boundary index computation proceeds as follows:
+
+\bigskip
+
+\begin{tabular}{l|rrrrrrrr}
+\texttt{B}             &  0 &  0 & 0 & 0 & 0 & 0 & 0 & 0 \\
+\texttt{V}             & 13 & 82 & 66 & 15 & 80 & 60 & 68 & 21 \\
+\hline
+\texttt{B += V $>$ L[0]} & -1 & -1 & -1 & -1 & -1 & -1 & -1 & -1 \\
+\texttt{B += V $>$ L[1]} & -1 & -2 & -2 & -1 & -2 & -2 & -2 & -1 \\
+\texttt{B += V $>$ L[2]} & -1 & -3 & -3 & -1 & -3 & -3 & -3 & -1 \\
+\texttt{B += V $>$ L[3]} & -1 & -4 & -3 & -1 & -4 & -3 & -3 & -1 \\
+\hline
+\texttt{B = 0 - B}    &  1 &  4 &  3 &  1 &  4  & 3 &  3 &  1 \\
+\end{tabular}
+
+\bigskip
+
+As a subsequent step, we extract the individual entries from \texttt{B} and look up the bit pattern for that particular histogram bin. All retrieved bit patterns are OR-ed together, creating the final imprint for a particular block. In this example, the four-bit imprint would be \texttt{1101}, since no entries fall into the second histogram bin. Furthermore, the resulting imprint needs to be checked against the imprint of the previous block of input values. This post-processing is not particularly performance-critical and only uses SIMD instructions for imprints larger than 64 bits. This example is also simplified, usually more than eight values would be represented by an imprint. In this case, the imprint is the logical OR of the results of several runs of the described method.
+
+Note how the bin boundaries for eight input values are determined using only 9 SIMD instructions. Using the sequential method described above, 64 individual comparison instructions would have been required to achieve the same result. As vector width increases over time, this ratio increases further.
+
+We have found that the performance of the bin index computation can be further increased by comparing the values against two (and not more) histogram boundaries in each iteration. The following code snippet shows this optimization: For each iteration along the limits array, \texttt{V} is compared (\texttt{cmpgt}) with \emph{two} limit vectors and the results added together and then added to the result. We suspect this to be due to the lack of a data dependency within the first two steps of calculation in this version. Intel's Haswell, Broadwell and Skylake architectures can execute at most two 256-Bit SIMD instructions per cycle, which suggests a two-stage pipeline for those instructions. Hence, by removing the data dependency, we can get at most two instructions completed per cycle. Analysis of performance counters confirmed the presented code reached this maximum. As we will see in the experimental results, the speedup of roughly 15x over the scalar code can probably be traced to this effect and implementation.
+
+The following code snippet shows this optimization for 32-bit integer input values.
+
+\begin{lstlisting}[language=c]
+__m256i B = _mm256_setzero_si256();
+for (int l1=0, l2=1; l1 < n_L-1; l1+=2, l2+=2) 
+  B = _mm256_add_epi32(B, 
+    _mm256_add_epi32(
+      _mm256_cmpgt_epi32(V, L[l1]),
+      _mm256_cmpgt_epi32(V, L[l2])));		
+\end{lstlisting}
+
+One limitation of this approach is that the number of histogram bin boundaries (and hence imprint length) is limited by the type of the input values. This is because a vectorised comparison operators returns comparison results of the same size in turn. If \texttt{V} is of type \texttt{char}, then we use \texttt{\_mm256\_cmpgt\_epi8} to compare the values to limit, hence we can address at most 127 when we accumulate comparison results in \texttt{B}. Hence, we cannot create 256-bit imprints for 8-bit values. This is not a big issue since it does not make a lot of sense to create 256 bins for at most 256 distinct values.
+
+\emph{Querying the vectorized imprints} is very similar to the scalar version with two exceptions. The comparison of both outer and inner range boundary bit masks with the imprint entries uses vectorized instructions. There are three possible outcomes of this comparison. First, the data values represented by the imprint has no overlap with the query range. In this case, the querying process simply advances to the next imprint. Second, there might be a match with the inner mask, in which case all values represented by the imprint satisfy the query predicate. The interesting third case is when there is a partial overlap, which means that individual data values need to be compared with the range boundaries. Here, SIMD operations are again used (as before) to compare multiple values with the upper and lower query range boundaries in one instruction. The following code snippet shows the SIMD version of comparing imprints with the query mask Q\_MASK and checking the values against the low Q\_LOW and high Q\_HIGH ends of the query range for false positives.
+
+\begin{lstlisting}[language=c]
+if (_mm256_testz_si256(Q_MASK, IMPRINT)
+ for (all values V in a data block)
+   idx = _mm256_movemask_epi8(
+          _mm256_sub_epi32(
+           _mm256_cmpgt_epi32(V, Q_LOW),
+           _mm256_cmpgt_epi32(V, Q_HIGH)));
+\end{lstlisting}
+
+The idx variable has set the bits of the corresponding values V that satisfy the comparison of low and high range query. It is a simple process afterwards to produce the qualifying values from the idx bit pattern.
+
+These two changes in the scalar code with SIMD instructions accounts for a speedup up to 16 times. In the next section we evaluate our changes and examine the benefits of using more histogram bins and larger than a cacheline data blocks. 
+
+\section{Experiments}\label{sec:experiments}
+
+For our experiments we used a subset of the collection of datasets as in the original paper of {\em Column Imprints}~\cite{DBLP:conf/sigmod/SidirourgosK13}. The data sets consist of 6,476 different columns, with a maximum number of records of 600 millions, which contain integer and decimal types of various length. For a detailed overview of the data sets we refer
+the reader to~\cite{DBLP:conf/sigmod/SidirourgosK13}. The dataset used for experiments is available on request.
+
+We created a stand-alone implementation of SIMD imprints, which is available for download\footnote{\url{https://github.com/lsidir/simd_imprints}}. We compared our SIMD-enabled version of imprints with the original scalar implementation of imprints.
+
+In this paper, we mainly investigate the impact of two parameters. First, the bit width of the imprint (number of bins). Note that wider imprints require more comparisons during index creation, thus we expected to have a slowdown as the number of bins increase, but always to be many times faster than the equivalent scalar version. The benefit of using larger bit-vectors for imprints is that the false positive ratio is reduced, thus having to check less values during query time. The second parameter we investigate is the number of encoded values per imprint, or in other words, the size of the block of data. This parameter will have an influence over the precision of the imprints. More values per block can lead to a smaller index size, but can lead to a negative impact on query performance, as more individual values need to be checked for false positives. In our experiments, we vary the imprint size between 8 and 256 bits and the input block size (number of input values times their individual length) between 64 and 256 bytes. Other aspects of the imprints, such as the size and the compression percentage does not change with the SIMD-enabled version, so we do not repeat these experiments. For each imprint configuration on each data column, we evaluate ten queries with even-spaced selectivity between 0\% and 100\%.
+
+\begin{figure}[h]
+\begin{center}
+\includegraphics[width=\columnwidth,trim=0mm 0mm 0mm 0mm,clip]{damon-box-tarkine.jpg}
+\end{center}
+\caption{``Modern'' hardware containing the Skylake CPU used for experiments.\label{fig:mach}}
+\end{figure}
+
+All experiments were run on an Intel Core i7-6770HQ (``Skylake-H'') CPU clocked at 2.60~GHz. The system contained 32 GB of main memory (Figure~\ref{fig:mach}). We also ensured that the files read are in the page cache before imprint creation. This machine had the latest available CPU to use. Although the physical dimensions are very small, it was capable of outperforming the bulky hi-end desktops we used in the original experiments with Column Imprints. 
+
+All plots below show the average imprint creation or query time per 1,000 values over all data sets (and queries).  In addition, the standard error is indicated as error bars.  For creation, ``values'' refers to input data values, for querying, it refers to imprint index entries. This is done to allow a fair comparison between data sets of different sizes and different characteristics. For example, since the imprints index collapses subsequent equal imprint entries using run-length encoding, the data distribution has a direct impact on the scanning effort. In extreme cases (a single constant value for the entire column), a single imprint entry can represent billions of data values. Hence this normalization.
+
+\subsection{Imprint Creation}
+We expect that the imprint size has a direct impact on index creation time, since every bit that is added requires additional comparison operations. However, we also expect that the SIMD implementation described above will significantly outperform the optimized scalar implementation. In this experiment, we have varied the imprint size for both implementations. 
+
+\begin{figure}[ht]
+\begin{center}
+\includegraphics[width=\columnwidth,trim=0mm 0mm 0mm 0mm,clip]{scalebins1.pdf}
+\end{center}
+\caption{Imprint creation time vs. width.\label{fig:scalebins1}}
+\end{figure}
+
+Figure~\ref{fig:scalebins1} shows the results for this experiment. The scalar baseline and the SIMD implementation are shown as different lines. We can see how the time required to create imprints for 1,000 values scales linearly to the amount of bins and hence imprint size. We can also see how the SIMD version greatly outperforms the scalar version, with the largest possible imprint size of 256 taking about as much time as the scalar code for 16 bit imprints. For the 64-Bit imprints, the scalar code required on average 120~\(\mu\text{s}\) per 1000 values, while the SIMD implementation took only 4~\(\mu\text{s}\) with very low variance.
+
+\begin{figure}[ht]
+\begin{center}
+\includegraphics[width=\columnwidth,trim=0mm 0mm 0mm 0mm,clip]{typewidth1.pdf}
+\end{center}
+\caption{Imprint creation time for different value type widths (SIMD Only).\label{fig:typewidth1}}
+\end{figure}
+
+Drilling down, we further expect that the input type width has a significant impact on vectorized imprint creation time. For example, for input data values of type \texttt{int16}, 16 values can be boundary-checked in one SIMD instruction, while for \texttt{int64} values only 4 comparisons are possible in a single instruction. Figure~\ref{fig:typewidth1} shows the imprint creation timing results (for the SIMD implementation only) by input data type width. As expected, we can see how data with 8-Byte input type width leads to the longest imprint creation time, while the 2-Byte data is fastest. For 256 Bit imprints, the 2-Byte values took on average 5.3~\(\mu\text{s}\) per 1,000 values, the 8-Byte took 38.5~\(\mu\text{s}\).
+
+\begin{figure}[ht]
+\begin{center}
+\includegraphics[width=\columnwidth,trim=0mm 0mm 0mm 0mm,clip]{block_size_bytes1.pdf}
+\end{center}
+\caption{Imprint creation time for different block sizes encoded (SIMD Only, 256 Bins).\label{fig:bytesperblock1}}
+\end{figure}
+
+Turning towards the second parameter, the amount of input data values per imprint entry, we expect that fewer values per imprint will improve creation time since fewer imprint candidates need to be created and compared with the previous entry for RLE purposes. For this experiment, we have varied the number of input values per imprint between 8 and 128 in such a way that the input block size (the amount of input values multiplied by their type length) ranges between 64 and 256. Figure~\ref{fig:bytesperblock1} shows the results of this experiment. We can see how indeed the imprint creation time drops significantly if more data is encoded into a single value. However, a larger block size will also lead to reduced precision, which has an adverse effect on query run time, which we investigate now.
+
+\subsection{Imprint Querying}
+
+Querying performance is a trade-off between to extremes. On the one side, the imprint index is empty, requiring a full scan of the data values. On the other side of the spectrum, the imprint index is a copy of the data. While both are technically valid, we are searching for a more balanced trade-off. This trade-off is controlled by imprint length and block size. 
+
+\begin{figure}[ht]
+\begin{center}
+\includegraphics[width=\columnwidth,trim=0mm 0mm 0mm 0mm,clip]{qblocksize1.pdf}
+\end{center}
+\caption{Imprint querying time for different block sizes (SIMD Only).\label{fig:qblocksize1}}
+\end{figure}
+
+We expect that larger block sizes will decrease query performance (as more entropy is lost), but it is unclear by how much. Figure~\ref{fig:qblocksize1} plots the time required to process 1,000 imprint index entries against increasing block sizes. Two lines are shown, one for 8 and 256 Bins. We see that query performance indeed decreases as block size is increased, but (on average) at most linearly. It is very likely that query performance will degrade for even larger block sizes, certainly if data values have to be fetched from disk.
+
+\begin{figure}[ht]
+\begin{center}
+\includegraphics[width=\columnwidth,trim=0mm 0mm 0mm 0mm,clip]{qblocksize2.pdf}
+\end{center}
+\caption{Imprint querying time for different amounts of values encoded (SIMD Only).\label{fig:qblocksize2}}
+\end{figure}
+
+In the original imprints paper, a 8-to-1 relationship between data value Bits and (before duplicate elimination) imprint Bits was found to work best. When scaling this up to larger imprints, we expect this relationship to still hold. Figure~\ref{fig:qblocksize2} shows a rather complex behavior of the queries. However, the basic assumption that a 8-to-1 relationship between data and index still holds: For the 64 Byte block size, we observe good performance for an imprint size of 64 Bit. For the 256 Byte blocks, 265 Bit imprints showed the best performance, which confirms our expectations. A similar result was found for the (not plotted) 128 Byte block size with 128 Bit imprints.
+
+Overall, we argue that the experimental results show good scalability of imprint indexes thanks to the availability of vectorized instructions.
+
+\section{Related Work}
+There has been a large amount of previous work related to using SIMD vectorization to speed up analytical data management tasks.  
+Early papers showed how existing implementations of relational operators could be sped up using SIMD instructions~\cite{DBLP:conf/sigmod/ZhouR02}. Generally speaking, systems that use columnar or (data-)vectorized storage models can benefit from a straightforward translation from scalar code implementing relational operators and equivalent vectorized code. 
+
+A more thorough operator redesign was shown to be required to to fully take advantage of vectorized instructions~\cite{Polychroniou:2015:RSV:2723372.2747645}. In this paper, selective load and store and scatter/gather operations available in modern SIMD instruction sets are used as building blocks for new scan and join operators. Experimental results show that for example for low selectivity, vectorized code can provide an approx. 10x throughput improvement in scans. Overall, the paper finds that vectorization favors cache-conscious algorithms and that the speedup provided by vectorization is independent of other optimizations.
+
+A paper comparing sort and hash join algorithms~\cite{DBLP:journals/pvldb/KimSCKNBLSD09} already reported the observation that sort-based join algorithms scale near-linearly with the SIMD width. The paper also predicted that sort-based join algorithms are expected to show better performance than hash-based approaches with a SIMD width of 512 Bits or higher. This shows the relevance of the increased vector withs that are now becoming available.
+
+Data layout adaption is a third option apart from the previously discussed operator re-implementation and algorithmic redesign. One paper proposes to adapt in-memory data layout in such a way that it is amenable to SIMD processing~\cite{Li:2013:BFS:2463676.2465322}. Here, every SIMD word contains bits from a large amount of data values, which allows early pruning of data blocks in selections based on prefix comparisons \emph{or} improved look-up performance.
+
+The overall progression could be described by the following chart with representative references:
+
+\bigskip
+
+\begin{center}
+\begin{tabular}{cr}
+Operator Re-Implementation with SIMD Instructions & \cite{DBLP:conf/sigmod/ZhouR02} \\
+$\downarrow$ & \\
+SIMD-Aware Algorithm Design & \cite{Polychroniou:2015:RSV:2723372.2747645} \\
+$\downarrow$ & \\
+SIMD-Aware Data Layout Adaption & \cite{Li:2013:BFS:2463676.2465322}\\
+\end{tabular}
+\end{center}
+
+\bigskip
+
+\section{Conclusion \& Research Outlook}\label{sec:conclusion}
+
+In this paper we have demonstrated that by substituting the expensive scalar code snippets of column imprints with the equivalent single instruction multiple data code snippets, we can achieve a speed up of almost 16x. The exercise of finding the equivalent SIMD version is an interesting one, and requires some work to identify the correct code snippets to be changed. SIMD instructions
+benefit from continues sequential loading and control flow branching has to be avoided always. For example, we plan to investigate the possibility of dropping altogether the compression features of column imprints (which entail some if-else statement) in favor of non-interrupting sequential loads and bulk bit-wise comparisons. Another option is to use the techniques from~\cite{DBLP:conf/sigmod/LangMFB0K16} to pre-computed candidate list output for all cases before looking for false positives, thus splitting the process of uninterrupted bulk operations and conditional branching.
+
+Another important aspect of our work is the expansion from 64-bit word registers to the equivalent 256=bit SIMD registers, and therefore the increase of the bit-vector word size.
+The soon to come AVX-512 which will support 32 512-bit SIMD registers will allow for even more performance boost for imprints.
+
+However, the interesting observation is that not only column imprints but other bit-vector based techniques can benefit from SIMD instructions. We believe that there is interesting work to be done here, and we intend to extend this work to other techniques such as WAH bitmap compression~\cite{Wu:2006:OBI:1132863.1132864}. 
+
+Another promising direction to speed up querying is to pre-compute all possible result offset vectors similar to~\cite{DBLP:conf/sigmod/LangMFB0K16}. For example, if the values $(1,5,6,3)$ are checked for the range query $[2,5]$, only the second and last entry are true positives. For this case, the pre-computed vector $(\mathtt{NULL}, 0, \mathtt{NULL}, 1)$ can be looked up, we add the base index for this block of values, say $42$, using vectorized instructions, and we have efficiently created the output candidate list $(\mathtt{NULL}, 42, \mathtt{NULL}, 43)$. AVX has a feature to control which elements from a SIMD register should be copied into contiguous main memory, making final assembly of the result efficient as well.
+
+A final thought on research outlook is that, although now we are successfully trying to adjust existing index structures to the SIMD era, we should start designing new indexes that have native support for vectorization. Complex compression, multiple branching, and other structures that aim at loading less data in the CPU might be abandoned for the use of SIMD instructions such as \_mm256\_stream\_load\_si256 that allow stream loading with non-temporal memory hints. The benefits of such bulk loads may overweight the benefits of less data transfer through control flow statements.
+
+\subsubsection*{Acknowledgments}
+Stefan Manegold of the CWI Database Architectures optimized the scalar imprints code. This work was partially funded by the Netherlands Organisation for Scientific Research (NWO), project ``Capturing the Laws of Data Nature'' (M\"uhleisen).
+
+\bibliographystyle{ACM-Reference-Format}
+\bibliography{sigproc} 
+
+\end{document}
