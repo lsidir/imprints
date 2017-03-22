@@ -3,6 +3,7 @@
 %\usepackage{booktabs} % For formal tables
 \usepackage{listings}
 \usepackage{todonotes}
+\usepackage{hyperref}
 
 
 % Copyright
@@ -34,6 +35,7 @@
 \title{Scaling Column Imprints using Advanced Vectorization}
 
 \author{Lefteris Sidirourgos}
+\authornote{this work was done while the author was at CWI, Amsterdam.}
 \affiliation{%
   \institution{ETH Zurich}  
   \streetaddress{Switzerland}
@@ -147,7 +149,7 @@ near future of the AVX-512 instruction set.
 To recap, in this paper we make the following contributions:
 \begin{itemize}
     \item We investigate how modern wide, vectorized instructions can improve performance to lightweight indexing structures such as column imprints.
-    \item We present a SIMD enables re-implementation of the scalar code of column imprints based on Advanced Vector Extensions (AVX-2). The implementation is available as Open Source through a GitHub repository~\footnote{https://github.com/lsidir/simd\_imprints}.
+    \item We present a SIMD enables re-implementation of the scalar code of column imprints based on Advanced Vector Extensions (AVX-2). The implementation is available as Open Source through a GitHub repository~\footnote{\url{https://github.com/lsidir/simd_imprints}}.
     \item We perform an extensive experimental evaluation of our implementation on a modern processor and project our finding to the upcoming AVX-512.
 \end{itemize}
 
