@@ -232,12 +232,12 @@ The right side of Figure~\ref{fig:imprints} shows a small dictionary example. Th
 column counts how many consecutive cachelines have unique imprints
 (i.e., one imprint per one cacheline), or how many consecutive cachelines share the same imprint
 (i.e., one imprint per many cachelines). The repeat column marks
-the one-to-one relationship between cachelines and imrpints ({\em repeat=0}), or the many-to-one
+the one-to-one relationship between cachelines and imprints ({\em repeat=0}), or the many-to-one
 ({\em repeat=1}). This compression exploits
 the empirical observation that data suitable for secondary indexing
 exhibits, in the cacheline level, some degree of clustering or partial
 ordering. {\em Column imprints} are designed such that any clustering or partial
-ordering is naturally exploited without the need for extra parametrization. 
+ordering is naturally exploited without the need for extra parameterization. 
 
 \begin{algorithm}[t]
 \begin{tabbing}
@@ -426,7 +426,7 @@ if (_mm256_testz_si256(check,check))
 
 The function \texttt{\_mm256\_testz\_si256} will return true if all bits in \texttt{check} are 0, but in order for
 this to happen \texttt{imprint1} and \texttt{imprint2} have to have all bits set exactly the same.
-Similalry, \texttt{\_mm256\_testz\_si256} function is used during the query process to check if an imprint has common
+Similarly, \texttt{\_mm256\_testz\_si256} function is used during the query process to check if an imprint has common
 bits set with the query mask, where the mask is also an \texttt{\_\_mm256i} type. We refer the reader to our code 
 repository\footref{repo} for further details about our implementation.
 
@@ -566,7 +566,7 @@ to adapt in-memory data layout in such a way that it is amenable to SIMD process
 SIMD word contains bits from a large amount of data values, which allows early pruning of data blocks in selections based on prefix comparisons
 or improved look-up performance.
 
-The overall research progression in transforming scalar code to vecorized could be described by the following chart with
+The overall research progression in transforming scalar code to vectorized could be described by the following chart with
 representative references.
 
 \begin{center}
