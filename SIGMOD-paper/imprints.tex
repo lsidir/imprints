@@ -1,0 +1,103 @@
+%\documentclass{acm_proc_article-sp}
+\documentclass{sig-alternate}
+%\documentclass{vldb}
+
+%%
+%% include packages
+%%
+\usepackage{times}                    %% for time fonts if needed
+\usepackage{amsmath}                  %% for math
+\usepackage{tabularx}                 %% resize tables
+\usepackage{colortbl}                 %% put some color to tables
+\usepackage{multirow}                 %% multi-rows/columns on tables
+\usepackage{booktabs}                 %% more for tables
+\usepackage{tikz}                     %% tikz drawing package
+\usepackage{graphicx}                 %% include graphics
+\usepackage{algorithm}                %% algorithm floated enviroment
+\usepackage{algorithmic}              %% algorithm enviroment
+\usepackage{balance}
+
+%%
+%% (re)new
+%%
+\newtheorem{theorem}{Theorem}
+\newtheorem{lemma}[theorem]{Lemma}
+\newtheorem{definition}{Definition}
+
+%%macros
+\newcommand{\la}{\langle}
+\newcommand{\ra}{\rangle}
+\newcommand{\smp}{\mathcal{S}}
+\newcommand{\prob}{\mathcal{P}}
+\renewcommand{\tt}{\texttt}
+\renewcommand{\rm}{\textrm}
+\renewcommand{\sf}{\textsf}
+\renewcommand{\it}{\textit}
+\renewcommand{\bf}{\textbf}
+\newcommand{\md}{\textmd}
+\renewcommand{\sc}{\textsc}
+
+
+\begin{document}
+\conferenceinfo{SIGMOD'13,} {June 22--27, 2013, New York, New York, USA.}
+\CopyrightYear{2013}
+\crdata{978-1-4503-2037-5/13/06}
+\clubpenalty=10000
+\widowpenalty = 10000
+
+\title{Column Imprints: A Secondary Index Structure}
+\numberofauthors{2}
+\author{
+\alignauthor Lefteris Sidirourgos\\
+\affaddr{CWI}\\
+\affaddr{Amsterdam, The Netherlands}\\
+\email{lsidir@cwi.nl}
+\alignauthor Martin Kersten\\
+\affaddr{CWI}\\
+\affaddr{Amsterdam, The Netherlands}\\
+\email{mk@cwi.nl}
+}
+
+\maketitle
+
+\begin{abstract}
+Large scale data warehouses rely heavily on secondary indexes, such as bitmaps
+and b-trees, to limit access to slow IO devices. However, with the advent
+of large main memory systems, cache conscious secondary indexes are needed to
+improve also the transfer bandwidth between memory and cpu. In this paper, we
+introduce \it{column imprint}, a simple but efficient cache conscious secondary
+index. A column imprint is a collection of many small bit vectors, each
+indexing the data points of a single cacheline. An imprint is used during query
+evaluation to limit data access and thus minimize memory traffic. The
+compression for imprints is cpu friendly and exploits the empirical observation
+that data often exhibits local clustering or partial ordering as a side-effect
+of the construction process. Most importantly, column imprint compression
+remains effective and robust even in the case of unclustered data, while other
+state-of-the-art solutions fail. We conducted an extensive experimental
+evaluation to assess the applicability and the performance impact of the column
+imprints. The storage overhead, when experimenting with real world datasets, is
+just a few percent over the size of the columns being indexed. The evaluation
+time for over 40000 range queries of varying selectivity revealed the
+efficiency of the proposed index compared to zonemaps and bitmaps with WAH
+compression.
+\end{abstract}
+
+% A category with the (minimum) three required fields
+\category{H.3}{Information Storage and Retrieval}{Content Analysis and Indexing}
+%\category{H.3}{Information Systems Applications}{Miscellaneous}
+%A category including the fourth, optional field follows...
+%\category{D.2.8}{Software Engineering}{Metrics}[complexity measures, performance measures]
+%\terms{Theory}
+\keywords{Secondary Index; Columnar Databases;} % NOT required for Proceedings
+
+\input{introduction}
+\input{construction}
+\input{operators}
+\input{updates}
+\input{background}
+\input{evaluation}
+\input{conclusions}
+\bibliographystyle{abbrv}
+{\small\bibliography{bibliography}}
+%\bibliography{bibliography}
+\end{document}

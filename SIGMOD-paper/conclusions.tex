@@ -1,0 +1,16 @@
+\section{Conclusions and Future Work}\label{sec:conclusions}
+
+Column imprints is a light-weight secondary index with a small memory
+footprint suited for a main-memory setting. It belongs to the class of
+bitvector indexes, which has a proven track record of improving access in
+large-scale data warehouses. Our extensive experimental evaluation
+shows significant query evaluation speed-up against pure scans and the
+established indexing approaches of zonemaps and bitmaps with bit-binning and
+WAH compression. The storage overhead of column imprints is just a few percent,
+with a max of 12\% over the base column.
+
+Column imprints can be extended to exploit multi-core
+platforms during the construction phase and during multi-attribute query
+processing. Akin to prevailing techniques, such as~\cite{SW07,WMC10}, judicious
+choice of the binning scheme, and a multi-level imprints organization, may
+lead to further improvements in specific application domains.

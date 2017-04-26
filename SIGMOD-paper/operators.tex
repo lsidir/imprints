@@ -1,0 +1,147 @@
+\section{Imprints Query Evaluation}\label{sec:operators}
+
+In this section we present the algorithms for evaluating range queries over the
+column imprints index. Given a range query
+$\mathcal{Q}=[\it{low},\it{high}]$, all values \it{v} in column \it{col} that
+satisfy $\it{low}\leq\it{v}\leq\it{high}$ need to be located. Since our
+setting is a columnar database, it suffices to return the \it{id} list
+of the qualifying values \it{v}.
+
+Evaluating range queries over column imprints is a straightforward procedure.
+The first step is to create an empty bit-vector and set the bits that
+correspond to the bins that are included in the range of query $\mathcal{Q}$.
+There might be more than one bits set, since the query range can span
+multiple bins. The query bit-vector is then checked against the imprint
+vectors, and if bitwise intersection indicates common bits set for both the
+query and the imprint vector, the corresponding cacheline is accessed for
+further processing. However, if all bits set correspond to bins that are fully
+included in the query range $[\it{low},\it{high}]$ the cacheline need not
+be checked at all. Otherwise, the algorithm examines all values in the
+cacheline to weed out false positives. Finally, because of our compression
+schema, some administrative overhead to keep the cachelines and the imprint
+vectors aligned is needed.
+
+\begin{algorithm}[t]
+\caption{Evaluate range queries over the column imprints index:
+\tt{query()}}
+\label{alg:select}
+\small{
+%\tt{
+\bf{Input:}  imprints index structure \it{imp}, column \it{col},
+query $\mathcal{Q}=[\it{low},\it{high}]$\\
+\bf{Output:} array \it{res} of \it{id}s
+\begin{tabbing}
+char $\it{vpc}$; \` /* constant values per cacheline */\\
+ulong $\it{i\_cnt}=0$;\` /* imprints count */\\
+ulong $\it{cache\_cnt}=0$;\` /* cacheline count */\\
+ulong $\it{id}=0$;\` /* \it{id}s counter */\\
+ulong $\it{*res}$;\` /* large enough array to hold the result */\\
+(\it{mask}, \it{innermask}) = \tt{make\_masks}(\it{imp},[\it{low},\it{high}]);\\
+\bf{for}\=\ $\it{i}=0\rightarrow \it{d\_cnt}-1$ \bf{do}
+\` /* iterate over the cacheline dictionary */\\
+\>\bf{if}\=\ $(\it{imp.cd}[\it{i}]\it{.repeat}\equiv 0)$ \bf{then}
+\` /* if \it{repeat} is not set */\\
+\>\> \bf{for}\=\ $\it{j}=\it{i\_cnt}\rightarrow \it{i\_cnt}+
+\it{imp.cd}[\it{i}]\it{.cnt}-1$ \bf{do}\\
+\>\>\>\bf{if}\=\ $(\it{imp.imprints}[\it{j}]\& \it{mask})$ \bf{then}
+\` /* if imprint vector matches mask */\\
+\>\>\>\>\bf{if}\=\ $((\it{imp.imprints}[\it{j}]\&\ \tilde{\ }\it{innermask})
+\equiv 0)$ \bf{then}\\
+\>\>\>\>\>\bf{for}\=\ $\it{id}=\it{cache\_cnt}\times\it{vpc}\rightarrow
+(\it{cache\_cnt}\times(\it{vpc}+1))-1$ \bf{do}\\
+\>\>\>\>\>\>$\it{res}=\it{res}\leftarrow\it{id}$;
+\` /* add \it{id} to the result set \it{res} */\\
+\>\>\>\>\>\bf{end for}\\
+\>\>\>\>\bf{else}\` /* need to check for false-positives */\\
+\>\>\>\>\>\bf{for}\=\ $\it{id}=\it{cache\_cnt}\times\it{vpc}\rightarrow
+(\it{cache\_cnt}\times(\it{vpc}+1))-1$ \bf{do}\\
+\>\>\>\>\>\>\bf{if}\=\ $(\it{col}[id]<\it{high}\wedge\it{col}[id]
+\geq\it{low})$ \bf{then}\\
+\>\>\>\>\>\>\>$\it{res}=\it{res}\leftarrow\it{id}$;
+\` /* add \it{id} to the result set \it{res} */\\
+\>\>\>\>\>\>\bf{end if}\\
+\>\>\>\>\>\bf{end for}\\
+\>\>\>\>\bf{end if}\\
+\>\>\>\bf{end if}\\
+\>\>\>$\it{cache\_cnt}\ += 1$;\` /* increase cache count by 1*/\\
+\>\>\bf{end for}\\
+\>\>$\it{i\_cnt}\ +=\it{imp.cd}[\it{i}]\it{.cnt}$; \` /* increase imprint count */\\
+\>\bf{else}\`  /* \it{repeat} is set */\\
+\>\>\bf{if}\=\ $(\it{imp.imprints}[\it{i\_cnt}]\& \it{mask})$ \bf{then}
+\` /* if imprint vector match mask */\\
+\>\>\>\bf{if}\=\ $((\it{imp.imprints}[\it{f\_count}]\&\ \tilde{\ }\it{innermask})
+\equiv 0)$ \bf{then}\\
+\>\>\>\>\bf{for}\=\ $\it{id}=\it{cache\_cnt}$\=$\times\it{vpc}\rightarrow$\\
+\>\>\>\>\>\>$(\it{cache\_cnt}\times\it{vpc})+\it{vpc}\times\it{imp.cd}[\it{i}]\it{.cnt}-1$ \bf{do}\\
+\>\>\>\>\>$\it{res}=\it{res}\leftarrow\it{id}$;
+\` /* add \it{id} to the result set \it{res} */\\
+\>\>\>\>\bf{end for}\\
+\>\>\>\bf{else}\` /* need to check for false-positives */\\
+\>\>\>\>\bf{for}\=\ $\it{id}=\it{cache\_cnt}$\=$\times\it{vpc}\rightarrow$\\
+\>\>\>\>\>\>$(\it{cache\_cnt}\times\it{vpc})+\it{vpc}\times\it{imp.cd}[\it{i}]\it{.cnt}-1$ \bf{do}\\
+\>\>\>\>\>\bf{if}\=\ $(\it{col}[id]<\it{high}\wedge\it{col}[id]
+\geq\it{low})$ \bf{then}\\
+\>\>\>\>\>\>$\it{res}=\it{res}\leftarrow\it{id}$;
+\` /* add \it{id} to the result set \it{res} */\\
+\>\>\>\>\>\bf{end if}\\
+\>\>\>\>\bf{end for}\\
+\>\>\>\bf{endif}\\
+\>\>\bf{end if}\\
+\>\>$\it{i\_cnt}\ += 1$; \` /* increase imprints count by 1 */\\
+\>\>$\it{cache\_cnt}\ += \it{imp.cd}[\it{i}]\it{.cnt}$;
+\` /* increase cache count */\\
+\>\bf{end if}\\
+\bf{end for}
+\end{tabbing}
+}%}
+\vspace{-10pt}
+\end{algorithm}
+
+Algorithm~\ref{alg:select} presents the details for evaluating a range query
+using imprints. The constant \it{vpc} is set equal to the number of values that
+fit in a cacheline. This is needed to align \it{id}s with the cachelines. In
+addition, counters \it{i\_cnt} and \it{cache\_cnt} are maintained to align
+imprints and cachelines, respectively. Next, two bit-vectors are produced,
+namely \it{mask} and \it{innermask}. The \it{mask} is a bit-vector that sets
+all bits that fall into the range $[\it{low},\it{high}]$. The \it{innermask} is
+a bit-vector with only the bits that fall entirely inside the query range set.
+More precisely, if a bin range contains one of the borders of the query range,
+the corresponding bit is not set. Therefore, if an imprint vector
+has only the bits from the \it{innermask} set, then all values in the
+corresponding cacheline fall into the query range and no further check for
+false-positives is needed. The algorithm runs by iterating over all
+entries in the cacheline dictionary. If the \it{repeat} flag is not set, then
+the next \it{cnt} imprint vectors correspond to \it{cnt} distinct cachelines.
+For any of these imprints, if there is at least one bit set in the same
+position as the ones in the \it{mask} bit-vector, the cacheline contains
+values that satisfy the query range. If in addition, there are no bits set
+different than the bits of the \it{innermask}, then all the values of the
+cacheline satisfy the query. In any other case, we need to check each value
+of the cacheline individually. For all qualifying values, the corresponding
+\it{id}s are materialized in the result array. If however the \it{repeat} flag
+is set, then by checking only one imprint vector we can determine if the next
+\it{cnt} cachelines contain values that fall into the range of the query. As
+before, an extra check with the \it{innermask} bit-vector may result in
+avoiding the check of each individual value for false-positives.
+
+Algorithm~\ref{alg:select} returns a materialized list of the \it{id}s that
+satisfy the range query. This list is then passed to the next operator of the
+query evaluation engine. However, it might be the case that a user's query
+contains many predicates for more than one attribute of the same relation. In
+this case, the \tt{query()} procedure of Algorithm~\ref{alg:select} is invoked
+multiple times, one for each attribute, with possible different
+$[\it{low},\it{high}]$ values. The most expensive part of
+Algorithm~\ref{alg:select} is the check for false-positives and the
+materialization of the \it{id}s. But in the case of multiple range queries over
+many columns of the same table, both of these expensive operations can be
+postponed. This technique is known in the literature as late materialization.
+To achieve this, instead of producing the materialized \it{id} lists,
+Algorithm~\ref{alg:select} has to return the list of the qualifying cachelines.
+After every range query is evaluated over the respective columns, the lists of
+cachelines are merge-joined, resulting in a smaller set of qualifying
+\it{id}s. This is based on the general expectation that the combination of many
+range queries will increase the selectivity of the final result set. After the
+merge-join, the qualifying \it{id}s that were common to all cachelines can be
+checked for false-positives. Note that the alternative indexing schemes used
+in the evaluation of Section~\ref{sec:evaluation} have been coded with the same
+rigidity.

@@ -1,0 +1,53 @@
+\section{Updating Column Imprints}\label{sec:updates}
+
+Column imprints are designed to support read intensive database applications.
+In such scenarios, updates are a relatively rare event, and when they occur,
+are performed in batches. The most common type of updates is appending new
+rows of data to the end of a table. Column imprints can easily cope with such
+updates. However, we can not exclude from our study updates that change an
+arbitrary value of a column, or insert/delete a row in the middle of a table.
+
+\subsection{Data Append}
+
+During data appends, any index that is based on bit vectors and bit-binning
+techniques has to perform two operations. The first one is to readjust, if
+necessary, the borders of the bins. Such a readjustment should be avoided since
+it calls for a complete rebuild of the index. For column imprints, this is very
+rare, since \it{i)} the first and last bins are used for overflow values, and
+\it{ii)} the bins were determined by sampling the active domain of the column.
+Any new data appended, need to have dramatically different value
+distribution to render the initial binning inefficient. The second operation
+is to update the bit vectors. For bitmap indexes this is a costly
+operation, since all bit vectors have to be updated, even those that are not
+mapping the new values~\cite{CGF07}. For column imprints this is not necessary.
+The imprint vectors are horizontally compressed, thus data appends simply cause
+new imprint vectors to be appended to the end of the existing ones, without the
+need of accessing any of the previous imprint vectors.
+
+\subsection{Imprints and Delta Structures}
+
+In place updates are never performed in columnar databases because of the
+prohibitive cost they entail. Instead, a delta structure is used that keeps
+track of the updates, and merges them at query time. A delta structure can
+be as simple as two tables with insertions and deletions that need to be
+union-ed and difference-ed, respectively, with the base table, or it can be
+a more complex structure, such as positional update trees~\cite{HZN+10}.
+
+Column imprints can cope with inter-column operations, such as unions and
+differences, by first applying them to the cacheline dictionaries, such that a
+candidate list of qualifying cachelines is created for both operands. The
+details of inter-column operations are out of the scope of this paper, and are
+left to be presented in the future. Nevertheless, even without such a
+functionality, column imprints can be used to access the base table to create
+a candidate list of qualifying cachelines. The underlying delta structure may
+then hold in addition the cacheline counter where an update has been performed
+in order to merge to the final result.
+
+Moreover, imprints can produce false positives, thus a deletion can be ignored
+by the corresponding imprint vector. An insertion however, will call for
+additional bits to be set to the imprint corresponding to the affected
+cachelines. Such an approach will eventually saturate the imprint index. In
+these cases, it is not uncommon to disregard the entire secondary index and
+rebuild it during the next query scan. The overhead for rebuilding an imprint
+index during a regular scan in minimal, such that it will go undetected by the
+user.

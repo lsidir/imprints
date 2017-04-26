@@ -1,0 +1,506 @@
+\section{Secondary Index with Imprints}\label{sec:construction}
+
+An imprint index is an efficient and concise secondary index for range and
+point queries. It is designed for columnar databases where multiple
+memory-resident or memory-mapped columns are repeatedly scanned.
+Imprints provide a coarse-grain filtering over the data, aimed at
+reducing expensive loading from memory to the cpu cache. Deployment of column
+imprints is suited for those cases where alternative properties do not hold.
+For example, if a column is already sorted, the proper use of binary search
+algorithms largely alleviates the overhead of accessing non-relevant memory
+pages. If the data is appended out of order, or the order is disturbed by
+updates, then column imprints can be considered as a fast access method to
+locate relevant data. An efficient column imprint maximizes the filtering
+capabilities with minimal storage overhead.
+
+Columnar databases decompose a relation into its attributes and sequentially
+store the values of each column. This differs from the traditional approach of
+row-stores that place complete tuples in adjacent pages. To enable tuple
+reconstruction in a column store, an ordered list of \it{(id, value)} pairs is
+maintained, where \it{id}s are unique and increasing identifiers. Values from
+different columns, but with the same \it{id}, belong to the same tuple.
+Typically, a column is implemented by a single dense array, thus \it{id}s need
+not be materialized since they can be easily derived from the position of the
+values in the array.
+%
+%\begin{figure}
+%\centering\includegraphics{figs/example3.eps}
+%\caption{A simple column and an example of zonemaps, bitmaps, and \it{imprints} indexes.}
+%\label{fig:example}
+%\end{figure}
+
+Figure~\ref{fig:example} shows a column with 15 integer values in the range
+of 1 to 8. The values are unsorted because the column corresponds to one of the
+unordered attributes of a relation. In the absence of any secondary index, a
+complete scan is needed to locate all values that satisfy the predicates of a
+query. The result of such a scan is the positions in the array of the qualifying
+values. It is preferred to return the positions rather than the actual values
+because of the \it{late materialization} strategies usually used in column
+stores~\cite{AMD+07}. However, instead of scanning the entire column, secondary
+indexes can be used to avoid accessing data that is certain not to be part
+of the query result.
+
+\subsection{State of the Art in Secondary Indexes}
+
+Zonemaps is a common choice for indexing secondary attributes. A zonemap index
+notes the minimum and the maximum values found across a predefined number of
+consecutive values, called the zones. The zonemap index of
+Figure~\ref{fig:example} partitions the column into $5$ zones. In this example,
+each zone has the size of a cacheline that fits exactly $3$ values. The first
+zone contains the values $1$, $8$, and $4$. The minimum value is $1$ and the
+maximum is $8$. Similarly, for the second zone the minimum value is $1$ and
+maximum $6$, and so on for the remaining zones. To evaluate a query using
+zonemaps, the minimum and maximum values of each zone are compared with the
+predicates of the query. If the predicates' ranges overlap with the range of
+a zone, then the zone (i.e., the cacheline) is retrieved and the
+exact positions of only the \it{qualifying} values are returned. Note that the
+ranges of the predicates and the zone may overlap but not be strictly
+inclusive.
+
+\begin{figure}
+\centering\includegraphics{figs/example3.eps}
+\caption{A simple column and an example of zonemaps, bitmaps, and \it{imprints} indexes.}
+\label{fig:example}
+\end{figure}
+
+Bitmaps are another popular choice for secondary indexing. They work by
+mapping the column domain to bit vectors. Each vector has as many bits as the
+size of the column. For each value found in a specific position of the column,
+the corresponding bit in the mapping bitvector is set. The mapping can be $1-1$
+if the cardinality of the column is low, or $N-1$, with the help of binning
+strategies, if the cardinality is high. A bitmap index uses significantly less
+storage than the column, thus making it cheaper to scan. Deciding if a value
+satisfies a query involves first checking the corresponding
+bitmap, and returning only the position of the bits that are set. The checking
+is done with bitwise operators, making the process faster than the value
+comparison needed by zonemaps. Figure~\ref{fig:example} details a bitmap index
+with 15 bits per bit vector, where each bit corresponds to one position of the
+column. There are 8 such bit vectors (drawn vertically in the figure), where
+the first one maps value $1$, the second one value $2$, and so on. Bits
+are set as follows: the $11$th position of the column contains the value $5$,
+therefore, in the $5$th bit vector, the $11$th bit is set. Similarly, the
+$3$rd value of the column is $4$, hence the $3$rd bit of the $4$th bitmap is
+set. In this example there is a 1-1 mapping between the eight unique values of
+the column and the eight vectors of the bitmap index.
+
+\subsection{Column Imprints}
+
+We propose \it{column imprints} as an alternative secondary index that best
+combines the benefits of the aforementioned state-of-the-art indexes.
+Column imprints map the values of a column to a vector of bits. However,
+instead of allocating one such vector per value, imprints allocate one
+vector per cacheline. We call the vectors of a column imprints index
+\it{imprint vectors} to distinguish them from the bitvectors of a bitmap
+index. An imprint vector does not have only one bit set per position, but as
+many bits as are needed to map all distinct values of a cacheline. To decide if
+a cacheline contains values that satisfy the predicates of a query, first
+the imprint vectors are checked. If at least one common bit between the
+bitvector that maps the query's predicates and the imprint vector is set, then
+the entire cacheline is fetched for further processing. The imprint is checked
+with the bitwise operator \tt{AND} thus making the initial filtering very fast,
+while the number of imprint vectors to be checked is significantly reduced
+because of having one per cacheline instead of one per value. The rightmost
+index in Figure~\ref{fig:example} depicts the imprint index of the example
+column. Each imprint vector uses 8 bits per cacheline, while three
+bits are set. The partitioning of the column is done per
+cacheline, same as the zones of the zonemap index. The imprint vector
+corresponding to the first cacheline has the $1$st, $4$th, and $8$th bit
+set, since the first three values of the column are $1$, $8$ and $4$. For the
+second cacheline the $1$st, $6$th, and $7$th bits are set, and so on
+for the rest of the cachelines. There are in total five imprint
+vectors to index the column of Figure~\ref{fig:example}. The example is
+designed with the cardinality of the column to be small enough to allow a
+$1$-$1$ mapping between values and bits. In the more common cases of large
+cardinality, imprints use approximated equi-width histograms to divide the
+domain into ranges and map one bit per range. We detail this technique in
+the following subsection along with all the construction algorithms for column
+imprints.
+
+Column imprints inherit many of the good properties of both zonemaps and
+bitmaps, while avoiding their pitfalls. First, although imprints are defined
+per cacheline, they are resilient to skewed data distribution, where zonemaps
+typically fail. If each cacheline contains both the minimum and the maximum
+value of the domain and one random value in between, zonemaps are practically
+useless, but imprints will have a different bit set for each of these random
+values. In addition, checking imprints is faster than zonemaps because there is
+no value comparison. Compared to bitmaps, imprints need less space since they
+are defined per cacheline and not per value. Finally, as we will demonstrate,
+imprints compress significantly better than state-of-the-art compression
+scheme for bitmaps.
+
+\subsection{Imprints Compression}\label{subsec:comp}
+
+\begin{figure}
+\centering\includegraphics{figs/imprint.eps}
+\caption{Column imprint index with compression (23 cachelines).}
+\label{fig:imprint}
+\end{figure}
+
+We develop a compression scheme similar to a run-length encoding but for
+imprint vectors. The compression scheme combined with bit-binning, makes column
+imprints an efficient solution for indexing very large columns with high
+cardinality of any type, such as doubles, floats, etc. The compression scheme
+benefits from our empirical observation that local clustering is a common
+phenomenon even for secondary attributes. In addition to that, the opportunities
+for compression also increase because of the non-dense nature of column
+imprints. Most importantly, even for cases where there is no clustering at all,
+column imprints remain space effective. The compression works by \it{i)}
+grouping together imprint vectors that are identical and consecutive, and
+\it{ii)} implying the \it{id} of the values with a concise numbering schema for
+the indexed cachelines. More specifically, we keep track of which imprints map
+to which cachelines by defining a \it{cacheline dictionary} with two entries,
+a \it{counter} and a \it{repeat} flag. By knowing the number of the cacheline
+we can easily compute the \it{id}'s of the values of the specific cacheline,
+since each cacheline contains a fixed number of values.
+
+The cacheline dictionary contains two types of \it{counter} entries,
+distinguished by the \it{repeat} flag. Assume that the \it{counter} has the
+value $x$. If \it{repeat} is unset, then the next $x$
+cachelines have all different imprint vectors. If, however, \it{repeat} is
+\it{set},
+then the next $x$ cachelines all have the same imprint vector, thus only one
+vector needs to be stored. Figure~\ref{fig:imprint} shows an example of the
+column imprints compression schema. Assume a column that can be partitioned
+to $23$ cachelines and that each imprint vector has 15 bits. From the
+\it{cacheline dictionary} of Figure~\ref{fig:imprint} we can deduce that the
+first $7$ cachelines all contain random values, thus each of them map to a
+different imprint vector. Therefore, the first $7$ imprint vectors correspond
+to the first $7$ cachelines. The next imprint vector, i.e., the $8$th,
+corresponds to the next thirteen cachelines, which according to the cacheline
+dictionary all have an identical imprint since \it{repeat} is set.
+Finally, the last $3$ cachelines are mapped by the last $3$ imprints.
+
+In the next subsection we demonstrate the technical details to create a column
+imprint. We build our ideas on top of the MonetDB architecture~\cite{MonetDB}.
+The choice of a specific columnar database architecture allows us to better
+present the details of our implementation, however, imprints can also be
+implemented with minor adjustments on other columnar architectures, such as
+C-Store~\cite{SAB+05} and MonetDB/X100~\cite{BZN05}. The most important design
+decision is how many values of a column an imprint vector covers. The decision
+is based on the size of the block managed by the specific database buffer pool.
+The \it{access granularity} of the underlying system design determines the
+number of values that each vector of an imprint covers. For example, if the
+execution model of the database engine is based on vectorization, then the size
+of the data vectors is used. In our scenario, where typically the database
+hot-set fits into main memory, our goal is to optimize the cpu cache access.
+For that reason, a column imprint consist of one vector per cacheline. The size
+of the cacheline is determined by the underlying hardware. In this work we
+assume the commonly used size of 64 bytes.
+
+\subsection{Imprints Construction Algorithm}
+
+The first step to create an imprint index for a column is to build a
+non-materialized histogram by sampling the values of that column. Then the
+imprint vectors are created with as many bits as the number of bins in
+the histogram, but never more than 64 bits. Each imprint covers a cacheline of
+64 bytes. For all values in a cacheline, the bins of the histogram into which
+they fall is located, and the corresponding bits are set. The process is
+repeated such that all cachelines are mapped by imprints. If consecutive
+imprint vectors are identical they are compressed to one and the counters of
+the cacheline dictionary are updated.
+
+The histogram serves as a way to divide the value domain $\mathcal{D}$ of the
+column into equal ranges. For this, only the bounds of each bin need to be
+stored in the imprint index structure. The histogram is created by sampling
+a small number of values from the column, not more than $2048$ in our
+implementation. The first bin always has values between $-\infty$ (i.e., the
+minimum value of the domain $\mathcal{D}$), up until the smallest value
+found in the sample. Similarly, the last bin contains all values greater
+than the largest sampled value up to $+\infty$. We expect that future
+inserts in the column will retain the same distribution of the values, however,
+the left and right most bins serve as overflow bins for outlier values. If the
+sampling returns fewer than 62 unique values, then the imprint can be
+adjusted to have as many bits as needed to map the columns with low
+cardinality. If the number of distinct sampled values is more than 62,
+the domain is divided into 62 ranges, where each range contains the same
+count of sampled values, including in the count the multiple occurrences of the
+same value. Based on these ranges the borders of the histogram are deduced.
+By counting also duplicate sampled values, it allows us to roughly approximate
+an equal-height histogram, since repeated values are more likely to be sampled,
+creating smaller ranges for their respective bins. The ranges of each bin are
+defined to be inclusive on the left, and exclusive on the right. For example,
+if $b[i]$ defines the border of the $i$th bin, then if $b[3]=10$ and
+$b[4]=13$, all values that are equal or greater than $10$ but less than
+$13$ fall into the $4$th bin with borders $[10,13)$, while value $13$ falls
+into the $5$th bin.
+
+\begin{algorithm}[t]
+\caption{Main function to create the column imprints index:
+\tt{imprints()}}
+\label{alg:construction}
+\small{
+%\tt{
+\bf{Input:} column \it{col} of size \it{col\_sz}\\
+\bf{Output:} imprints index structure \it{imp} for column \it{col}
+\begin{center}
+{\small
+\begin{tabularx}{\columnwidth}{ XX }
+typedef struct cache\_dict \{&typedef struct imp\_idx \{\\
+\hspace{0.5cm}uint \it{cnt}:24;&\hspace{0.5cm}cache\_dict \it{*cd};\\
+\hspace{0.5cm}uint \it{repeat}:1;&\hspace{0.5cm}ulong \it{*imprints};\\
+\hspace{0.5cm}uint \it{flags}:7;&\hspace{0.5cm}coltype \it{b}[64];\\
+\} cache\_dict;&\hspace{0.5cm}uchar \it{bins}; \\
+&\} imp\_idx;
+\end{tabularx}
+}
+\vspace{-10pt}
+\end{center}
+\begin{tabbing}
+struct imp\_idx \it{imp};
+\` /* initialize the column imprints index structure */\\
+char $\it{vpc}$; \` /* constant values per cacheline */\\
+ulong $\it{i\_cnt}=0$;\` /* imprints count */\\
+ulong $\it{d\_cnt}=0$;\` /* dictionary count */\\
+ulong $\it{imprint\_v}=0$;\` /* the imprint vector */\\
+$\tt{binning}(\it{imp})$;
+\` /* determine the histogram's size and bin borders */\\
+\bf{for}\=\ $\textit{i}=0\rightarrow \textit{col\_sz}-1$ \bf{do}
+\` /* for all values in \it{col} */\\
+\>$\it{bin} = \tt{getbin}(\it{imp},\ \it{col}[\it{i}])$;
+\` /* locate bin */\\
+\>$\it{imprint\_v} = \it{imprint\_v}\ |\ (1\ll \textit{bin})$;
+\` /* set bit */\\
+\>\bf{if}\=\ $(\textit{i}\mod\textit{vpc-1} \equiv 0)$ \bf{then}
+\` /* end of cacheline reached */\\
+\>\>\bf{if}\=\ $($\=$\it{imp.imprints}[\it{i\_cnt}] \equiv \it{imprint\_v}\ \wedge$\` /* same \it{imprint} */\\
+\>\>\>\>$\it{imp.cd}[\it{d\_cnt}]\it{.cnt} < \it{max\_cnt}-1)$ \bf{then}
+\` /* \it{cnt} not full */\\
+\>\>\>\bf{if}\=\ $(\it{imp.cd}[\it{d\_cnt}]\it{.repeat}\equiv 0)$ \bf{then}\\
+\>\>\>\>\bf{if}\=\ $(\it{imp.cd}[\it{d\_cnt}]\it{.cnt}\not = 1)$ \bf{then}\\
+\>\>\>\>\>$\it{imp.cd}[\it{d\_cnt}]\it{.cnt}\ -= 1$;
+\` /* decrease count \it{cnt} */\\
+\>\>\>\>\>$\it{d\_cnt}\ += 1$;
+\` /* increase dictionary count \it{d\_cnt} */\\
+\>\>\>\>\>$\it{imp.cd}[\it{d\_cnt}]\it{.cnt}\ = 1$;
+\` /* set count to 1 */\\
+\>\>\>\>\bf{end if}\\
+\>\>\>\>$\it{imp.cd}[\it{d\_cnt}]\it{.repeat} = 1$;
+\` /* turn on flag \it{repeat} */\\
+\>\>\>\bf{end if}\\
+\>\>\>$\it{imp.cd}[\it{d\_cnt}]\it{.cnt}\ +=1$;
+\` /* increase \it{cnt} by 1 */\\
+\>\>\bf{else}\=\` /* different \it{imprint} than previous */\\
+\>\>\>$\it{imp.imprints}[\it{i\_cnt}] = \it{imprint\_v}$;\\
+\>\>\>$\it{i\_cnt}\ += 1$;\\
+\>\>\>\bf{if}\=\ $($\=$\it{imp.cd}[\it{d\_cnt}]\it{.repeat}\equiv 0\ \wedge$\\
+\>\>\>\>\>$\it{imp.cd}[\it{d\_cnt}]\it{.cnt}<\it{max\_cnt}-1)$
+\bf{then}\\
+\>\>\>\>$\it{imp.cd}[\it{d\_cnt}]\it{.cnt}\ +=1$;
+\` /* increase \it{cnt} by 1 */\\
+\>\>\>\bf{else}\\
+\>\>\>\>$\it{d\_cnt}\ += 1$;
+\` /* increase dictionary count \it{d\_cnt} */\\
+\>\>\>\>$\it{imp.cd}[\it{d\_cnt}]\it{.cnt}\ = 1$;
+\` /* set count to 1 */\\
+\>\>\>\>$\it{imp.cd}[\it{d\_cnt}]\it{.repeat} = 0$;
+\` /* set flag \it{repeat} off */\\
+\>\>\>\bf{end if}\\
+\>\>\bf{end if}\\
+\>\>$\it{imprint\_v} = 0$;\` /* reset \it{imprint} for next cacheline */\\
+\>\bf{end if}\\
+\bf{end for}
+\end{tabbing}
+}%}
+\vspace{-10pt}
+\end{algorithm}
+
+For each imprint, an index number is needed to point to the corresponding
+cacheline. In practice, these pointers need not be materialized since the
+sequence of the imprint vectors indirectly provide the numbering of the
+cachelines. However, since identical imprints tend to repeat multiple times,
+even if the data of the indexed column is not clustered or sorted, there is
+a great opportunity for compressing imprints together. With a 64-bit imprint
+vector one may encode hundreds, and in many cases thousands, of sequential
+cachelines. Therefore, the \it{cacheline dictionary} is needed to keep track
+of the count of the cachelines and imprints. We define the two structures to
+store and administer the column imprints index, namely \it{imp\_idx} and
+\it{cache\_dict} (see Algorithm~\ref{alg:construction}). Structure
+\it{imp\_idx} holds all the constructs needed to
+maintain the imprints index of one column. It consists of a pointer to the
+array of the cacheline dictionary (i.e., \it{cache\_dict}), a pointer to the
+array of the imprint vectors, an array with 64 values that holds the bounds of
+the bins of the histogram, and the actual number of bins of the histogram.
+Recall that it may not be needed to have all 64 bins if the cardinality is
+small, e.g., an 8-bit imprint vector may be enough instead of a 64-bit vector.
+The dictionary structure \it{cache\_dict} is a 4-byte value, split as follows:
+24 bits are reserved for the counter \it{cnt}, 1 bit is to mark if the next
+imprint is repeated \it{cnt} times, or if the next \it{cnt} imprints correspond
+to one cacheline each. Finally, 7 bits of the cacheline dictionary structure
+are reserved for future use.
+
+Algorithm~\ref{alg:construction} details the process of creating the column
+imprints index. Function \tt{imprints()} receives as input a column
+\it{col} and its size \it{col\_sz}. The function returns an imprints index
+structure \it{imp} containing an array of imprints and the cacheline
+dictionary. The algorithm works by first calling the \tt{binning()}
+procedure, which is described in detail later on in the text. The result
+of the \tt{binning()} procedure is the number of bins needed to partition
+the values of the columns, and the ranges of the bins. Next, for each value of
+the column, the \tt{get\_bin()} function is invoked in order to determine the
+bin the current value falls into. The corresponding bit in the imprint vector
+is then set. If the end of a cacheline has been reached, the current imprint
+vector must be stored and a new empty one must be created. However, in order
+to compress consecutive imprints, the algorithm checks if the imprint vector is
+equal to the previous one. If so, the count \it{cnt} field of the cacheline
+dictionary and the \it{repeat} flag is updated as follows. If the \it{repeat}
+of the previous entry in the cacheline dictionary is not set and the count
+\it{cnt} is greater than $1$, a new entry is created. If the \it{repeat}
+of the previous entry is not set but the count \it{cnt} is
+$1$, then the \it{repeat} is set and the count \it{cnt} is incremented to
+$2$. If the imprint vector of the current cacheline is not equal to the
+previous one, then a slightly different procedure is followed to update the
+entries in the cacheline dictionary. If the current entry does not have the
+\it{repeat} flag set, then the counter \it{cnt} is simply increased. Otherwise,
+a new entry is created with count $\it{cnt}=1$ and the \it{repeat} unset.
+After this, the cacheline dictionary is correctly updated and the imprint
+stored. Finally, a new imprint vector is created with all the bits off, the
+next value of the column is fetched, and the process is repeated.
+
+\subsection{Binning and Efficient Binary Search}
+
+\begin{algorithm}[t]
+\caption{Define the number of bins and the ranges of the bins of the
+histogram: \tt{binning()}}
+\label{alg:binning}
+\small{
+%\tt{
+\bf{Input:}  imprints index structure \it{imp}, column \it{col}\\
+\bf{Output:} number of bins \it{imp.bins} and the ranges \it{imp.b}
+\begin{tabbing}
+coltype \it{*sample} = \tt{uni\_sample}(\it{col},2048);
+\` /* sample 2048 values */\\
+\tt{sort}(\it{sample});
+\` /* sort the sample */\\
+\it{smp\_sz} = \tt{duplicate\_elimination}(\it{sample});
+\` /* remove duplicates */\\
+\bf{if}\=\ $(\it{smp\_sz} < 64)$ \bf{then}
+\` /* less than 64 unique values */\\
+\>\bf{for}\=\ $\it{i}=0\rightarrow \it{smp\_sz}-1$ \bf{do}\\
+\>\>$\it{imp.b}[\it{i}]=\it{sample}[\it{i}]$;
+\` /* populate \it{b} with the unique values */\\
+\>\bf{end for}\\
+\>\bf{if} $(\it{i}<8)$ \bf{then} $\it{imp.bins}=8$;
+\` /* determine the number of \it{bins} */\\
+\>\bf{else if} $(\it{i}<16)$ \bf{then} $\it{imp.bins}=16$;\\
+\>\bf{else if} $(\it{i}<32)$ \bf{then} $\it{imp.bins}=32$;\\
+\>\bf{else} $\it{imp.bins}=64$;\\
+\>\bf{end if}\\
+\>\bf{for}\=\ $\it{i}=\it{i}\rightarrow 63$ \bf{do}\\
+\>\>$\it{imp.b}[\it{i}]= $ coltype\_MAX;
+\` /* default value */\\
+\>\bf{end for}\\
+\bf{else}
+\` /* more then 64 unique values */\\
+\> double $\it{y} = 0, \it{ystep} = \it{smp\_sz}/62$;\\
+\>\bf{for}\=\ $\it{i}=0\rightarrow 62$ \bf{do}\\
+\>\>$\it{imp.b}[\it{i}]=\it{sample}[(\text{int})\it{y}]$;
+\` /* set ranges for all bins */\\
+\>\>$\it{y}+=\it{ystep}$;\\
+\>\bf{end for}\\
+\>$\it{imp.b}[63]=$ coltype\_MAX;\\
+\bf{end if}
+\end{tabbing}
+}%}
+\vspace{-10pt}
+\end{algorithm}
+
+Algorithm~\ref{alg:binning} describes the implementation of the
+\tt{binning()} procedure. Given a column \it{col}, a uniform sample of
+2048 values is created. Afterwards, the sample is sorted and all duplicates are
+removed. At this point the size of the sample \it{smp\_sz} might be smaller
+than 2048. If \it{smp\_sz} is less than 64, the cardinality of the column
+can be approximated to be equal to the number of unique values
+found in the sample. Therefore, each bin of the histogram can contain exactly
+one value. Even if this approximation is not precise, there is an extremely
+slim possibility to be much off. In such a case, simply more than one value
+will fall into the same bin. The next step of the algorithm is to fill the
+\it{b} array with the unique values of the sample, and to set the number of
+the \it{bins} to the next larger power of 2. Moreover,
+the remaining empty bins are assigned the maximum value of the domain. This is
+needed in order for the \tt{get\_bin()} procedure to work properly. If the
+total number of unique values of the sample is 64 or more, we need to divide
+the
+bins into larger ranges. This is done by dividing the \it{smp\_sz} by 62 and
+assigning
+the result of the division to \it{ystep}. Notice that \it{ystep} is a double.
+This is necessary in order to guarantee an even spread of the ranges of the
+bins. For example, if the result of the division is $1.2$, then the 5th bin
+should contain the 6th value of the sample, but if we kept the result as an
+integer, i.e., $\it{ystep}=1$, the $5$th value of the sample would be
+assigned to the $5$th bin. Each bin \it{b} is assigned to be equal to the
+next \it{ystep} sampled value, until all bins are set.
+% Once this is done, \tt{binning()} returns control to the \tt{imprints()} function.
+
+%\begin{algorithm}[t]
+%\caption{Binary search with nested if-statements to locate the bin which a
+%value falls into: \tt{getbin()}}
+%\label{alg:getbin}
+%\small{
+%%\tt{
+%\bf{Input:} imprints index structure \it{imp}, value \it{v}\\
+%\bf{Output:} the bin where value \it{v} falls into
+%\begin{tabbing}
+%\tt{middle}$(v,p)$:\ \ \ \=\bf{if}
+%$(\it{v}\geq \it{imp.b}[\it{p}-1] \wedge
+%\it{v} < \it{imp.b}[\it{p}])~\it{res} = \it{p};$\\
+%\tt{left}$(v,p)$:\> \bf{if} $(\it{v} < \it{imp.b}[\it{p}])$\\
+%\tt{right}$(v,p)$:\> \bf{if} $(\it{v}\geq \it{imp.b}[\it{p}-1])$\\
+%\\
+%\tt{right}\=$(v,32)$\\
+%\>\tt{right}\=$(v,48)$\\
+%\>\>\tt{right}\=$(v,56)$\\
+%\>\>\>\tt{right}\=$(v,60)$\\
+%\>\>\>\>\tt{right}\=$(v,62)$\\
+%\>\>\>\>\>$\it{res}=62$;\\
+%\>\>\>\>\>\tt{right}\=$(v,63)$\\
+%\>\>\>\>\>\>$\it{res}=63$;\\
+%\>\>\>\>\tt{middle}$(v,61)$\\
+%\>\>\>\>\tt{left}$(v,60)$\\
+%\>\>\>\>\>$\it{res}=60$;\\
+%\>\>\>\tt{middle}$(v,59)$\\
+%\>\>\>\tt{left}$(v,58)$\\
+%\>\>\>\>$\it{res}=58$;\\
+%\>$\vdots$\\
+%\tt{middle}$(v,31)$\\
+%\tt{left}$(v,30)$\\
+%\>\tt{right}\=$(v,16)$\\
+%\>\>\tt{right}\=$(v,24)$\\
+%\>$\vdots$\>\>$\ldots$\\
+%\end{tabbing}
+%}%}
+%\end{algorithm}
+
+In order to determine the bin a value falls into, \tt{get\_bin()}
+is invoked. %Algorithm~\ref{alg:getbin} details the implementation.
+The approach taken is to perform a cache-conscious binary search over the 64
+bins. For this, we use nested if-statements instead of a for-loop. We noticed
+during our experimentation that by explicitly unfolding the code for the
+binary search and by using if-statements without any else-branching, the search
+can become three times faster, or even more. This is because each if-statement
+is independent allowing the cpu to execute the branches in parallel. For this,
+three macros are defined. The macro \tt{middle()}, checks if a value falls
+inside a range, and two others, called \tt{left} and \tt{right}, check if a
+value is smaller or larger than a range boundary. The algorithm then is
+constructed by repeatedly dividing the search space into half, and invoking the
+\tt{right}, \tt{middle} and \tt{left} macros, in that order. Since
+there are no else-statements, many if-statement may evaluate to
+be true, but only the last assignment of the return variable \it{res} will
+hold. For this reason the search is performed by starting from the 63rd bin
+and decreasing.
+
+%\subsection{Complexity Analysis}
+%
+The algorithms to construct the column imprint index are short and optimized to
+be cpu friendly. The complexity of \tt{imprints()} function is linear to the
+size of the column. Assume that a column has $n$ values, and each cacheline
+contains $c$ values. The most costly part is the call to the \tt{get\_bin()}
+function which performs $3$ comparisons before dividing the search space in
+half, thus it needs $3\times\log{64}=18$ comparisons for each
+value. Therefore, for creating the entire imprint index we need $18\times n$
+comparisons. The call to \tt{binning()} also involves one scan of the $n$
+values of the column but the rest of the operations are independent of the
+input. Finally, the update of the cacheline dictionary is only performed
+$\frac{n}{c}$ times, and the cost is negligible (5 comparisons in the worst
+case) compared to \tt{get\_bin()}. During our experimentation we thoroughly
+studied the effects of different design and implementation choices. Here, we
+presented the one that performed the best.

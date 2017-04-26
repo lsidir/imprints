@@ -1,0 +1,55 @@
+\section{Related Work}\label{sec:background}
+Column imprints can be viewed as a new member of the big family of bitmapped
+based indexes. Bitmapped indexes have become the prime solution to deal with
+the dimensionality curse of traditional index structures such as B-trees and
+R-trees. Their contribution to
+speed up processing has been credited to Patrick O'Neil through the work on the
+Model 204 Data Management System~\cite{ON87,OG95}. Since then, database engines
+include bitmapped indexes for both fast access over persistent data and as
+intermediate storage scheme during query processing, e.g. Sybase IQ,
+Postgresql, IBM DB2, Oracle. Besides traditional bitmaps, Bloom
+filters~\cite{B70} have been used to decide if a record can be found in a
+relation, and thus postponing bringing the data into memory. However, Bloom
+filters are not suited for range queries, the target of column imprints.
+
+Bitmap indexing relies on three orthogonal techniques~\cite{WOS06}:
+binning, encoding and compression. Binning concerns the decision of how many
+bit vectors to define. For low cardinality domains, a single bit vector for
+each distinct value is used. High cardinality domains are dealt
+with each bit vector representing a set of values. The common strategy is to
+use a data value histogram to derive a number of equally sized bins. Although
+binning reduces the number of bit vectors to manage, it also requires a post
+analysis over the underlying table to filter out false positives during query
+evaluation. Column imprints use similar binning techniques.
+
+Since each record turns on a single bit in one bit vector of the index only,
+the bitmaps become amendable to compression. Variations of run-length encoded
+compression have been proposed. The state-of-the art approach is the
+Word-Aligned Hybrid (WAH)~\cite{WOS02,WOS08} storage scheme. WAH forms the
+heart of the open-source package
+FastBit\footnote{http://crd-legacy.lbl.gov/\~{ }kewu/fastbit/}, which
+is a mature collection of independent tools and a C++ library for indexing file
+repositories. Consequently, column imprints use another variation of
+run-length encoded but for identical cacheline mappings instead of consecutive
+equal values.
+
+Bitmap indexing has been used in large scientific database applications, such
+as high-energy physics, network traffic analysis, lasers, and earth
+sciences.
+However, deployment of bitmap indexing over large-scale scientific databases is
+disputed. \cite{SW07} claims that based on information theoretic constructs,
+the length of a compressed interval encoded bitmap it too large when
+high cardinality attributes are indexed. The storage size may become orders of
+magnitude larger than the base data. Instead, a multi-level indexing scheme is
+proposed to aid in the design of an optimal binning strategy. They extend the
+work on bit binning~\cite{GS09,WOS04}. Alternatively, the data distribution in
+combination with query workload can be used to refine the binning
+strategy~\cite{Kou00,CI99}.
+
+With the advent of multi-core and gpu processors it becomes attractive to
+exploit data parallel algorithms to speed up processing.  Bit vectors carry the
+nice property of being small enough to fit in the limited gpu memory, while
+most bit operations nicely fall in the SIMD algorithm space. Promising results
+have been reported in~\cite{GWB09}. Similar, re-engineering the algorithms to
+work well in a flash storage architecture have shown significant
+improvements~\cite{WMC10}.

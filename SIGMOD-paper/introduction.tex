@@ -1,0 +1,122 @@
+\section{Introduction}\label{sec:intro}
+
+Indexes are a vital component of a database system. They allow the system
+to efficiently locate and retrieve data that is relevant to the users' queries. Despite the large body of research literature, just a few solutions have found
+their respective places in a database system~\cite{BKS+90,HNP95,IKM07,OQ97}.
+Nevertheless, the pursuit for more efficient and succinct indexing structures
+remains.
+
+Indexes are divided into \it{primary} and \it{secondary} according to their
+ability to govern the placement of the data. Primary indexes combine
+navigational structures with physical data clustering to achieve fast access.
+The benefit is that relevant data is placed in adjacent pages and thus
+significantly improving the evaluation of range queries. However, each
+additional primary index on the same relation calls for a complete copy of the
+data, rendering the storage overhead prohibitive. Similarly, secondary indexes
+are auxiliary structures that speed up search, but they do not change the order
+of the data in the underlying physical storage. Secondary indexes are typically
+much smaller than the referenced data and, therefore, faster to access and
+query. However, retrieving the relevant data from disk can be a costly
+operation since it may be scattered over many pages. As long as the time to
+scan the secondary index is significantly less than accessing the data, and the
+selectivity of the query is high, secondary indexes can significantly improve
+the query evaluation time.
+
+Most structures designed for primary indexing, such as B-tree and hash tables,
+can also be used for secondary indexing. However, they are not as lightweight
+as one would wish. Bitmaps, or variations of bitmaps, are more often used for
+this task~\cite{WLO+85}. Bitmaps work by mapping individual values to an array
+of bits. At query time, the bitmap is examined and whenever the bits that
+correspond to the query's predicates are set, the mapped data is retrieved for
+further processing. Bitmaps are traditionally used for attributes with low
+cardinality~\cite{ON87}, although bit-binning techniques make them suitable
+for larger domains too~\cite{CI99,SW07}.
+
+With the introduction of column stores and the shift of the memory
+bottleneck~\cite{MKB09}, the need for designing \it{hardware-conscious}
+secondary indexes becomes more evident. In a main memory DBMS, the problem
+of efficiently accessing disk blocks is replaced with the problem of
+minimizing cache misses. In addition, algorithms require a more
+careful implementation. There is much less design space to hide an inefficient
+implementation behind the latency of accessing a disk block.
+
+A second paradigm shift concerns the volume and the nature of the data. Most
+notable of them all are scientific database applications that stress the limits
+of modern designs by including hundreds of attributes in a single relation. In
+addition, the value domains are often of double precision, rather than the
+traditional categorical ones encountered in business applications.
+Column stores are the prime candidates for providing solutions for such
+demanding applications. On high-end servers, with large main memories, it is
+even possible to keep many columns with billions of elements in memory over a
+long period of time. Nevertheless, fast access, supported by light-weight
+indexing structures, remains in demand to improve the interactive scientific
+exploration process.
+
+To address these challenges, we propose a simple but efficient secondary
+indexing structure, called \it{column imprints}. A column imprint is a cache
+conscious secondary indexing structure suitable for both low and high
+cardinality columns. Given a column with values from domain $\mathcal{D}$, we
+derive a small sample to approximate a histogram of a few (typically 64 or
+less) equal-height bins. The entire column is then scanned, and for every
+cacheline of data, a bit vector is created. The bits in each vector correspond
+to the bins of the histogram. A bit is set if at least one value in the
+cacheline falls into the corresponding bin. The resulting bit vector is an
+\it{imprint} of the current cacheline that describes which buckets of the
+approximated histogram the values of the cacheline fall into. The collection of
+all the resulting bit vectors form a unique \it{column imprint}. Consequently,
+by examining an imprint of a column, the execution engine can decide --in
+a cacheline granularity-- which parts of the column data are relevant to the
+query predicates, and only then fetch them for further processing. A column
+imprint is particularly suited for evaluating both range and point queries on
+unsorted data. Contrary to existing work, a column imprint is a \it{non-dense}
+bit indexing scheme, i.e., only one bit is set for all equal values in a
+cacheline, instead of the traditional approach where each data point is always
+mapped to a different bit.
+
+To reduce the memory footprint of a column imprint, we introduce a simple
+compression scheme based on a run-length encoding of imprints. Consecutive and
+identical bit vectors are compressed together and annotated with a counter.
+Paraphrasing, our compression
+schema can be characterized as row-wise, i.e., it compresses bit vectors
+horizontally, contrary to the more common column-wise approach that partitions
+a bitmap vertically and compress it per column~\cite{WOS02}. The horizontal
+compression exploits our empirical observation that, in most data warehouses
+that we explored, data suitable for secondary indexing exhibits, in the
+cacheline level, some degree of clustering or partial ordering. These desirable
+properties stem either from the regular and canonical data insertion procedure,
+or from the production of the data itself, or even indirectly imposed by the
+other primary indexed attributes of the same relation. Column imprints are
+designed such that any clustering or partial ordering is naturally exploited
+without the need for extra pasteurization. In other words, they are less
+susceptible to the order in which individual values appear in a cacheline,
+while more opportunities for compression are presented. In addition,
+because of this immunity to value order within a cacheline, a column imprint
+remains robust even in the case of highly unclustered data. We experimentally
+demonstrate that imprints perform well and behave as intended even in the
+presence of skewed data, where other state-of-the-art bitmap compression
+techniques, such as WAH~\cite{WOS02}, are less effective.
+
+The contributions of our work can be summarized as follows:
+\begin{itemize}
+\item We introduce column imprints, a light-weight secondary index
+structure for main memory database systems.
+\item We detail the algorithms and the implementation details for constructing
+and compressing a column imprint.
+\item We present the algorithms to efficiently evaluate range queries with the
+use of column imprints.
+\item We study the effect on imprints when updating the values of a column.
+\item We quantify the amount of local clustering by introducing
+a metric called \it{column entropy}.
+\item We conduct an extensive comparative experimental evaluation of
+the imprint index structure using thousands of columns taken from several
+real-world datasets.
+\end{itemize}
+
+The remainder of the paper is organized as follows. In
+Section~\ref{sec:construction} we detail the ideas and the algorithms for
+constructing a column imprint. In Section~\ref{sec:operators} we present the
+algorithms for querying the proposed index. Next, we study the different cases
+of updating column imprints in Section~\ref{sec:updates}.
+Section~\ref{sec:background} presents the related work. In
+Section~\ref{sec:evaluation} we present an extensive experimental evaluation
+for column imprints. We conclude in Section~\ref{sec:conclusions}.

@@ -1,0 +1,38 @@
+# Important! Use gnuplot 4.2+, to have 'with labels' style.
+GNUPLOT=gnuplot
+GRAYSCALE=1
+
+%.pdf : %.eps
+	epstopdf $<
+
+%.eps : %.fig
+ifdef GRAYSCALE
+	fig2dev -L eps -N  $< > $@
+else
+	fig2dev -L eps  $< > $@
+endif
+
+%.eps : %.gp
+ifdef GRAYSCALE
+	cd `dirname $<` && \
+	perl -p -e 's/^(set\s+terminal)(.*)color(.*)$$/\1\2 \3/g;' \
+		< `basename $<` > `basename $<`.tmp && \
+	$(GNUPLOT) `basename $<`.tmp && \
+	rm `basename $<`.tmp
+else
+	(cd `dirname $<` && $(GNUPLOT) `basename $<`)
+endif
+	# Make green color in LT1 darker
+	perl -i -p -e 's/LT1 \{ PL \[4 dl 2 dl\] 0 1 0 DL \} def/LT1 { PL [4 dl 2 dl] 0 0.6 0 DL } def/g;' $@
+	perl -i -p -e 's/LC1 \{0 1 0} def/LC1 {0 0.6 0} def/g;' $@
+	# Make yellow color in LT5 darker
+	perl -i -p -e 's/LC5 \{1 1 0} def/LC5 {0.7 0.7 0} def/g;' $@
+
+%.eps : %.dia
+	dia --nosplash -e $@ $<
+
+%.eps: %.mp
+	cd `dirname $<` && mpost `basename $<`
+
+%.png : %.eps
+	convert -density 300 $< png:$@
