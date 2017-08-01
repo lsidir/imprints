@@ -50,6 +50,11 @@ do {								\
 		Z += ((V) >= bounds[_i].X);	\
 } while (0)
 
+
+void customerizedPrint(aggregation_result_t result) {
+
+}
+
 void* run_multipass(void *arg) {
 
 	JoinThreadArgs* threadArgs = (JoinThreadArgs*)(arg);
@@ -106,27 +111,30 @@ void* run_multipass(void *arg) {
             GETBIN(bin, colRValues[i], B, step, X);															\
 			highermask = bin << left_shift;																	\
             HASH_IMPS(colRValues[i], cache[cacheIndex], lowermask, highermask);								\
+            HASH_IMPS(colLValues[i], cache[cacheIndex], lowermask, highermask);								\
             __builtin_prefetch(&ht->table[cache[cacheIndex].pos], 1, 1);									\
         }																									\
 																											\
-        /* build - [startIndex ... endIndex - prefetchOffset)	*/											\
+        											\
         uint64_t prefetchIndex = startIndex + PREFETCH_OFFSET;    											\
         const uint64_t endIndexPrefetch = endIndex - PREFETCH_OFFSET;										\
         for (uint64_t i = startIndex; i < endIndexPrefetch; i++) {											\
-            /* re-use hash values and positions, which have been already computed*/							\
+            const uint64_t preCacheIndex;							\
             const uint64_t cacheIndex = i & cacheMask;														\
             INSERT_POS(cache[cacheIndex].hash, cache[cacheIndex].pos, i);									\
             																								\
-            /* prefetching*/																				\
+            																				\
 			GETBIN(bin, colRValues[prefetchIndex], B, step, X);												\
 			highermask = bin << left_shift;																	\
             HASH_IMPS(colRValues[prefetchIndex], cache[cacheIndex], lowermask, highermask);					\
+            HASH_IMPS(colLValues[prefetchIndex], cache[cacheIndex], lowermask, highermask);					\
             __builtin_prefetch(&ht->table[cache[cacheIndex].pos], 1, 1);									\
             prefetchIndex++;																				\
         }																									\
         for (uint64_t i = endIndexPrefetch; i < endIndex; i++) {											\
             const uint64_t cacheIndex = i & cacheMask;														\
             INSERT_POS(cache[cacheIndex].hash, cache[cacheIndex].pos, i);									\
+            /* INSERT_POS(cache[cacheIndex].hash, cache[cacheIndex].pos, i); */								\
         }																									\
         free(cache);																						\
 }
@@ -173,14 +181,14 @@ void* run_multipass(void *arg) {
         PrefetchCache *cache = (PrefetchCache *) malloc_aligned(PREFETCH_OFFSET * sizeof(PrefetchCache));			\
         const uint64_t cacheMask = (1 << unsignedLog2(PREFETCH_OFFSET)) - 1;										\
         																											\
-		/* fill cache*/																								\
+																										\
 		for (uint32_t i = startIndex; i < startIndex + PREFETCH_OFFSET; i++) {										\
 			const uint64_t cacheIndex = i & cacheMask;																\
 			HASH(colLValues[i], cache[cacheIndex]);																	\
 			__builtin_prefetch(&ht->table[cache[cacheIndex].pos], 0, 1);											\
 		}																											\
 																													\
-		/* probe [0 .. n - prefetchOffset)*/																		\
+																													\
 		uint64_t prefetchIndex = startIndex + PREFETCH_OFFSET; 														\
 		const uint64_t endIndexPrefetch = endIndex - PREFETCH_OFFSET;												\
 		for (uint64_t i = startIndex; i < endIndexPrefetch; i++) {													\
@@ -190,7 +198,7 @@ void* run_multipass(void *arg) {
 			LOOKUP_POS(cache[cacheIndex].pos, colLValues[i]);														\
 			count += (found_tuple_oid != oid_nil);																	\
 																													\
-			/* prefetching	*/																						\
+																													\
 			HASH(colLValues[prefetchIndex], cache[cacheIndex]);														\
 			__builtin_prefetch(&ht->table[cache[cacheIndex].pos], 0, 1);											\
 			prefetchIndex++;																						\
@@ -268,6 +276,7 @@ void* run_visitlist(void *arg) {
         const uint64_t per_thread = colRCount / threadCount;												\
         const uint64_t startIndex = threadId * per_thread;													\
         const uint64_t endIndex = ((threadId == threadCount - 1) ? colRCount : (threadId + 1) * per_thread);\
+        const uint64_t midIndex = 1;\
         																									\
         T  *restrict colRValues = (T *) colR->col;															\
         																									\
@@ -282,25 +291,32 @@ void* run_visitlist(void *arg) {
         PrefetchCache *cache = (PrefetchCache *) malloc_aligned(PREFETCH_OFFSET * sizeof(PrefetchCache));	\
         const uint64_t cacheMask = PREFETCH_OFFSET - 1;														\
         																									\
-        /* fill cache*/																						\
+																											\
         for (uint32_t i = startIndex; i < startIndex + PREFETCH_OFFSET; i++) {								\
             const uint64_t cacheIndex = i & cacheMask;														\
-            																								\
+            const uint64_t cacheIndexPre = cacheIndex+1;													\
+			const uint64_t cacheIndexPost = cacheIndex-1;													\
+			const uint64_t cacheIndexMid = floor(cacheIndex/2) + 1;											\
+																											\
+																											\
+			lowermask = bin << left_shift;																	\
             GETBIN(bin, colRValues[i], B, step, X);															\
 			highermask = bin << left_shift;																	\
             HASH_IMPS(colRValues[i], cache[cacheIndex], lowermask, highermask);								\
             __builtin_prefetch(&ht->table[cache[cacheIndex].pos], 1, 1);									\
         }																									\
 																											\
-        /* build - [startIndex ... endIndex - prefetchOffset)	*/											\
+        											\
         uint64_t prefetchIndex = startIndex + PREFETCH_OFFSET;    											\
         const uint64_t endIndexPrefetch = endIndex - PREFETCH_OFFSET;										\
         for (uint64_t i = startIndex; i < endIndexPrefetch; i++) {											\
             /* re-use hash values and positions, which have been already computed*/							\
             const uint64_t cacheIndex = i & cacheMask;														\
             INSERT_POS(cache[cacheIndex].hash, cache[cacheIndex].pos, i);									\
-            																								\
-            /* prefetching*/																				\
+            INSERT_POS(cache[cacheIndex].hash, cache[cacheIndex+i].pos, i);																								\
+            																				\
+																							\
+																							\
 			GETBIN(bin, colRValues[prefetchIndex], B, step, X);												\
 			highermask = bin << left_shift;																	\
             HASH_IMPS(colRValues[prefetchIndex], cache[cacheIndex], lowermask, highermask);					\
@@ -364,6 +380,18 @@ void* run_visitlist(void *arg) {
 			__builtin_prefetch(&ht->table[cache[cacheIndex].pos], 0, 1);											\
 		}																											\
 																													\
+		/* recursive partition */																											\
+		for (i = 0; i < nextPartitionNum; ++i) {								\																			\
+			partition_result_t = radixPartition(partition[i]);			\
+			aggregation_result_t = aggregation(partition_result_t);			\
+			customerizedPrint(aggregation_result_t);	\
+							\
+		}																					\
+																													\
+																													\
+																													\
+																													\
+
 		/* probe [0 .. n - prefetchOffset)*/																		\
 		uint64_t prefetchIndex = startIndex + PREFETCH_OFFSET; 														\
 		const uint64_t endIndexPrefetch = endIndex - PREFETCH_OFFSET;												\

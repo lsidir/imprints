@@ -9,13 +9,22 @@ scalar_imprints(Column *column, Imprints_index *imps)
 	unsigned long colcnt = column->colcount;
 	int bit;
 	int k, values_per_block = imps->blocksize/column->typesize;
-
+#if 0
 #define GETBIT(Z, X)								\
 	do {											\
 		int _i;										\
 		Z = 0;										\
 		for (_i = 0; _i < imps->bins-1; _i++)		\
 			Z += (col[i] > imps->bounds[_i].X);		\
+	} while (0)
+#endif
+
+#define GETBIT(Z, X)								\
+	do {											\
+		int _i;										\
+		Z = 0;										\
+		for (_i = 1; _i < imps->bins; _i++)			\
+			Z += (col[i] >= imps->bounds[_i].X);	\
 	} while (0)
 
 #define SCALAR_IMPS(T, _T, X) {																		\
@@ -233,10 +242,21 @@ create_imprints_aligned(Column *column,
 
 	imps->bins = impsidxToBeAligned->bins;
 
+#define COPY_BOUNDS(X)												\
+	for (int i = 0; i < imps->bins; ++i) 							\
+		imps->bounds[i].X = impsidxToBeAligned->bounds[i].X;		\
+
 	//copy bins
-	for (int i = 0; i < imps->bins; ++i) {
-		imps->bounds[i] = impsidxToBeAligned->bounds[i];
+	switch (column->coltype) {
+		case TYPE_bte: COPY_BOUNDS(bval); break;
+		case TYPE_sht: COPY_BOUNDS(sval); break;
+		case TYPE_int: COPY_BOUNDS(ival); break;
+		case TYPE_lng: COPY_BOUNDS(lval); break;
+		case TYPE_oid: COPY_BOUNDS(ulval); break;
+		//case TYPE_flt: MAKE_LIMITS(ps, fval); break;
+		//case TYPE_dbl: MAKE_LIMITS(pd, dval); break;
 	}
+
 
 	imps->imprintsize = imps->bins/8; /* in bytes */
 	imps->imprints    = (char *) malloc_aligned(imps->imprintsize * (max_imprints+32));
@@ -251,7 +271,7 @@ create_imprints_aligned(Column *column,
 		imps = scalar_imprints(column, imps);
 	}
 
-	VERBOSE printf("%s %s imprints data_size=%ld(bytes) typesize=%d imprints_size=%ld(bytes)[%ld%%] imps_cnt=%lu dct_cnt=%lu bins=%d blocksize=%d(bytes) imprintsize=%d values_per_bloc=%d\n",
+	VERBOSE printf("%s %s imprints data_size=%ld(bytes) typesize=%d imprints_size=%ld(bytes)[%ld%%] imps_cnt=%lu dct_cnt=%lu bins=%d blocksize=%d(bytes) imprintsize=%d values_per_block=%d\n",
 				   column->colname,
 				   simd?"SIMD  ":"SCALAR",
 				   column->colcount*column->typesize,
@@ -444,7 +464,7 @@ int buildImpsR2L(Column *colL, Column *colR, int max_bins, int blocksize) {
 	binning(colR, colR_impsidx->bounds, &(colR_impsidx->bins), max_bins);
 
 	/* create imprints for column L according to colR_impsidx->bounds */
-	create_imprints_aligned(colL, blocksize, max_bins, 1, colR_impsidx);
+	create_imprints_aligned(colL, blocksize, max_bins, 0, colR_impsidx);
 
 	return 0;
 }

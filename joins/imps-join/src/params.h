@@ -6,6 +6,12 @@
 #ifndef PARAMS_H_
 #define PARAMS_H_
 
+#define IMPS_PAGE	64		/* the block size each bit vector represents */
+#define IMPS_WIDTH	64
+#define MAX_IMPS_BITS 6
+
+
+
 #ifdef OID_WIDTH_8B /* 64-bit surrogate_id*/
 typedef uint64_t surrogate_t;
 #else /* 32-bit surrogate_id*/

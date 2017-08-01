@@ -196,11 +196,13 @@ main(int argc, char *argv[])
     	return -1;
     }
 
+
     fprintf(stdout, "[INFO ] Done\n");
 #if 1
 	query_result_t result;
 	for (uint32_t i = 0; i < REPEAT; ++i) {
-		result = groupby(colL, colR, cmd_params.nthreads, aggrconf);
+		//result = groupby(colL, colR, cmd_params.nthreads, aggrconf);
+		result = partitionedGroupby(colL, colR, cmd_params.nthreads, aggrconf);
 	}
 #endif
 

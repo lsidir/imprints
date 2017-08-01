@@ -23,6 +23,11 @@ typedef struct {
 	pthread_barrier_t * barrier;	/* for thread sync */
 
 	unsigned int imps_bits;			/* # of bits used in hash value to encode imprints */
+
+	ThreadDctPointer* dctPointers;
+
+	uint64_t * matches;	/* to store the number of join result per thread */
+	unsigned int num_cacheline_per_thread;
 } JoinThreadArgs;
 
 

@@ -49,7 +49,11 @@ create_relation_pk(Column* col);
 int 
 create_column_fk_from_pk(Column *fkcol, Column *pkcol);
 
-
+/**
+ * Read column from file (one value per row as the format)
+ */
+int
+ReadColumnFromFile(Column *col, char * filename);
 
 /** @} */
 

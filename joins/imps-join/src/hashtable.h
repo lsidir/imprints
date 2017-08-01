@@ -8,8 +8,8 @@
 #ifndef HASHTABLE_H_
 #define HASHTABLE_H_
 
-#define _IDHASH_ 1
-
+//#define _IDHASH_ 1
+#define _FIBHASH_ 1
 
 typedef struct  {
     uint32_t hash;
@@ -48,9 +48,14 @@ typedef struct {
 
 #elif defined(_FIBHASH_)
 	/** Fibonacci Hashing */
+	/*
 	inline intkey_t hashKey(const intkey_t k) const {
 		return (k * 11400714819323198485ull) | (1ull<<((sizeof(intkey_t)*8-1)));
 	}
+	*/
+#define hashKey(KEY) (((KEY * 11400714819323198485ull) | (1ull<<((sizeof(uint32_t)*8-1)))) & ht->mask)
+#define hashKey_imps(KEY, LMASK, HMASK) ((((KEY * 11400714819323198485ull) | (1ull<<((sizeof(uint32_t)*8-1)))) & LMASK) | HMASK)
+
 #elif defined(_CRCHASH_)
 	/** CRC Hashing */
 	inline intkey_t hashKey(const intkey_t k) const {
@@ -59,6 +64,7 @@ typedef struct {
 #else
 
     /** MurmurHash64A */
+	/*
     inline intkey_t hashKey(intkey_t k) const {
         const intkey_t m = 0xc6a4a7935bd1e995;
         const int r = 47;
@@ -73,6 +79,7 @@ typedef struct {
         h ^= h >> r;
         return h | (1ull << ((sizeof(intkey_t) * 8 - 1)));
     }
+    */
 
 #endif
 

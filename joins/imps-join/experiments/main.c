@@ -40,6 +40,10 @@ struct cmdparam_t {
 	int fullrange_keys;			// keys covers full int range?
 
 	unsigned int imps_bits;		// # of bits in the hash value used to encode imprints info; 6 by default
+
+	/* read data from file */
+	char r_col_filename[256];	// build column file name
+	char l_col_filename[256];	// probe column file name
 };
 
 
@@ -66,6 +70,8 @@ static struct impsalgo_t impsalgos [] =
 		{"L2R", buildImpsL2R},
 		{{0}, 0}
 };
+
+const char * DATAPATH = "/home/zeroxwj/Desktop/AllCode/CWI_imps_join/workspace/scripts/tpch100g_query_data_extract/";
 
 /* command line handling functions */
 void parse_args(int argc, char ** argv, cmdparam_t * cmd_params);
@@ -96,7 +102,10 @@ main(int argc, char *argv[])
 	cmd_params.fullrange_keys = 0;
 	cmd_params.typesize		= 4;
 
-	cmd_params.imps_bits 	= 6;
+	cmd_params.imps_bits 	= 3;
+
+	//cmd_params.r_col_filename = "";
+	//cmd_params.l_col_filename = "";
 
 	parse_args(argc, argv, &cmd_params);
 
@@ -122,6 +131,7 @@ main(int argc, char *argv[])
     colR->max.ival = INT_MIN;
     colR->imps_idx = NULL;
 
+    colR->col = NULL;
     colR->col = (char *) malloc_aligned(colR->typesize * colR->colcount);
 
     if (!colR->col) {
@@ -130,6 +140,7 @@ main(int argc, char *argv[])
     }
 
     /* Column R value generation*/
+#if 0
     seed_generator(cmd_params.r_seed);
 
     if (cmd_params.fullrange_keys) {
@@ -139,6 +150,12 @@ main(int argc, char *argv[])
     } else {
     	create_relation_pk(colR);	// shuffled unique primary key
     }
+#endif
+
+    /* Read Column R from file */
+    //printf("%s\n", cmd_params.r_col_filename);
+    assert(strlen(cmd_params.r_col_filename) > 0);
+    ReadColumnFromFile(colR, cmd_params.r_col_filename);
 
     fprintf(stdout, "[INFO ] Done\n");
 
@@ -162,6 +179,7 @@ main(int argc, char *argv[])
 
     assert(colL->coltype == colR->coltype);
 
+    colL->col = NULL;
     colL->col = (char *) malloc_aligned(colL->typesize * colL->colcount);
 
     if (!colL->col) {
@@ -170,6 +188,7 @@ main(int argc, char *argv[])
     }
 
     /* Column L value generation*/
+#if 0
     seed_generator(cmd_params.l_seed);
 
     if (cmd_params.skew > 0) {
@@ -177,6 +196,11 @@ main(int argc, char *argv[])
     } else {
     	create_column_fk_from_pk(colL, colR);
     }
+#endif
+
+    /* Read Column L from file */
+    assert(strlen(cmd_params.l_col_filename) > 0);
+    ReadColumnFromFile(colL, cmd_params.l_col_filename);
 
     fprintf(stdout, "[INFO ] Done\n");
 
@@ -298,7 +322,6 @@ void print_help(char * progname) {
 void
 parse_args(int argc, char ** argv, cmdparam_t * cmd_params)
 {
-
     int c;
 
     while(1) {
@@ -306,28 +329,26 @@ parse_args(int argc, char ** argv, cmdparam_t * cmd_params)
             {
                 /* These options set a flag. */
                 {"help",       no_argument,    0, 'h'},
-                {"version",    no_argument,    0, 'v'},
+                {"imps-bits",    no_argument,    0, 'm'},
                 /* These options don't set a flag.
                    We distinguish them by their indices. */
                 {"algo",    required_argument, 0, 'a'},
                 {"nthreads",required_argument, 0, 'n'},
-                {"perfconf",required_argument, 0, 'p'},
+                /*{"perfconf",required_argument, 0, 'p'},*/
+                /* columns file name */
+                {"l-filename",  required_argument, 0, 'p'},	/*l=>probe*/
+                {"r-filename",  required_argument, 0, 'b'},	/*r=>build*/
+                {"l-size",  required_argument, 0, 'l'},
                 {"r-size",  required_argument, 0, 'r'},
-                {"s-size",  required_argument, 0, 's'},
-                {"perfout", required_argument, 0, 'o'},
+                /*{"perfout", required_argument, 0, 'o'},*/
                 {"r-seed",  required_argument, 0, 'x'},
                 {"s-seed",  required_argument, 0, 'y'},
                 {"skew",    required_argument, 0, 'z'},
-                /* partitioning fanout, e.g., 2^rdxbits */
-                {"partfanout",  required_argument, 0, 'f'},
-                {"numastrategy",    required_argument, 0, 'S'},
-                {"mwaybufsize", required_argument, 0, 'm'},
-                {0, 0, 0, 0}
             };
         /* getopt_long stores the option index here. */
         int option_index = 0;
 
-        c = getopt_long (argc, argv, "a:n:p:r:s:o:x:y:z:hvf:m:S:",
+        c = getopt_long (argc, argv, "h:m:a:n:p:b:l:r:x:y:z",
                          long_options, &option_index);
 
         /* Detect the end of the options. */
@@ -344,26 +365,12 @@ parse_args(int argc, char ** argv, cmdparam_t * cmd_params)
                   printf (" with arg %s", optarg);
               printf ("\n");
               break;
-#if 0
           case 'a':
-              i = 0; found = 0;
-              while(algos[i].joinalgorithm) {
-                  if(strcmp(optarg, algos[i].name) == 0) {
-                      cmd_params->algo = &algos[i];
-                      found = 1;
-                      break;
-                  }
-                  i++;
-              }
-
-              if(found == 0) {
-                  printf("[ERROR] Join algorithm named `%s' does not exist!\n",
-                         optarg);
-                  print_help(argv[0]);
-                  exit(EXIT_SUCCESS);
-              }
+        	  cmd_params->joinalgo = atoi(optarg);	//0-> default, 1->multipass, 2->visitlist
               break;
-#endif
+          case 'm':
+        	  cmd_params->imps_bits = atoi(optarg);	// vary # of partitions
+              break;
           case 'h':
           case '?':
               /* getopt_long already printed an error message. */
@@ -375,11 +382,11 @@ parse_args(int argc, char ** argv, cmdparam_t * cmd_params)
               cmd_params->nthreads = atoi(optarg);
               break;
 
-          case 'r':
+          case 'l':	/* the probe column */
               cmd_params->l_size = atol(optarg);
               break;
 
-          case 's':
+          case 'r': /* the build column */
               cmd_params->r_size = atol(optarg);
               break;
 
@@ -393,6 +400,29 @@ parse_args(int argc, char ** argv, cmdparam_t * cmd_params)
 
           case 'z':
               cmd_params->skew = atof(optarg);
+              break;
+
+          case 'p':
+        	  //strcpy(cmd_params->l_col_filename, DATAPATH);
+        	  //printf("setting l_col_filename\n");
+        	  //strcpy(cmd_params->l_col_filename, "/home/zeroxwj/Desktop/AllCode/CWI_imps_join/workspace/scripts/tpch100g_query_data_extract/Q19_l_partkey.dat");
+        	  //strcpy(cmd_params->l_col_filename, "/home/zeroxwj/Desktop/AllCode/CWI_imps_join/workspace/scripts/tpch100g_query_data_extract/");
+              //strncat(cmd_params->l_col_filename, optarg, 128);
+              //printf("%s\n", cmd_params->l_col_filename);
+        	  printf("%s\n", optarg);
+        	  sprintf(cmd_params->l_col_filename, "%s%s", DATAPATH, optarg);
+        	  printf("%s\n", cmd_params->l_col_filename);
+              break;
+
+          case 'b':
+              //strcpy(cmd_params->r_col_filename, DATAPATH);
+        	  //printf("setting r_col_filename\n");
+        	  //strcpy(cmd_params->r_col_filename, "/home/zeroxwj/Desktop/AllCode/CWI_imps_join/workspace/scripts/tpch100g_query_data_extract/Q19_p_partkey.dat");
+        	  //strcpy(cmd_params->r_col_filename, "/home/zeroxwj/Desktop/AllCode/CWI_imps_join/workspace/scripts/tpch100g_query_data_extract/");
+              //strncat(cmd_params->r_col_filename, optarg, 128);
+              //printf("%s\n", cmd_params->r_col_filename);
+        	  printf("%s\n", optarg);
+        	  sprintf(cmd_params->r_col_filename, "%s%s", DATAPATH, optarg);
               break;
 
           default:

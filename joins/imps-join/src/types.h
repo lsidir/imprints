@@ -85,7 +85,7 @@ struct joinconfig_t {
 /* printing options */
 #define VERBOSE        if (1)
 #define TIMING		   if (1)
-
+#define DEBUG		   if (1)
 
 
 /* Using MonetDB style types */
@@ -123,6 +123,16 @@ typedef union {
 	float fval;
 	double dval;
 } ValRecord;
+
+typedef struct {
+	unsigned long 	dct_start_entry;	/* dct start entry (start from 0) */
+	unsigned long	dct_end_entry;		/* dct end entry */
+	//unsigned int 	residual_blks;		/* remaining imps to be traversed for start entry */
+	unsigned int	start_bv_index;		/* the start index of bv in dct_start_entry */
+	unsigned int	end_valid_bv_num;	/* valid num of bv in dct_end_entry */
+	unsigned long 	imps_start;			/* start index of imprints bit vectors */
+	//unsigned int	flag_single_entry;	/* 1 indicate single entry, i.e., dct_start_entry == dct_end_entry, otherwise 0*/
+} ThreadDctPointer;
 
 /* The Column Imprints contains a binned imprint bitvector
  * to weed out blocks of no interest in a scan.
