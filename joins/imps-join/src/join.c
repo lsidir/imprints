@@ -793,7 +793,7 @@ void* run_default(void *arg) {
 }
 
 query_result_t hashjoin(Column * colL, Column * colR, unsigned int threadCount, joinconf_t joinCfg) {
-	query_result_t result;
+	query_result_t result = {0, 0, 0.0, 0, 0, 0};
 
 	/* step 1: initialize the hash table */
 	unsigned long colRCount = colR->colcount;
