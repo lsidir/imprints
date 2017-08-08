@@ -71,7 +71,8 @@ static struct impsalgo_t impsalgos [] =
 		{{0}, 0}
 };
 
-const char * DATAPATH = "/home/zeroxwj/Desktop/AllCode/CWI_imps_join/workspace/scripts/tpch100g_query_data_extract/";
+//const char * DATAPATH = "/home/zeroxwj/Desktop/AllCode/CWI_imps_join/workspace/scripts/tpch100g_query_data_extract/";
+const char * DATAPATH = "/home/zeroxwj/Desktop/AllCode/CWI_imps_join/workspace/microbenchmark/extract_from_monetdb/";
 
 /* command line handling functions */
 void parse_args(int argc, char ** argv, cmdparam_t * cmd_params);
@@ -409,9 +410,9 @@ parse_args(int argc, char ** argv, cmdparam_t * cmd_params)
         	  //strcpy(cmd_params->l_col_filename, "/home/zeroxwj/Desktop/AllCode/CWI_imps_join/workspace/scripts/tpch100g_query_data_extract/");
               //strncat(cmd_params->l_col_filename, optarg, 128);
               //printf("%s\n", cmd_params->l_col_filename);
-        	  printf("%s\n", optarg);
+        	  //printf("%s\n", optarg);
         	  sprintf(cmd_params->l_col_filename, "%s%s", DATAPATH, optarg);
-        	  printf("%s\n", cmd_params->l_col_filename);
+        	  //printf("%s\n", cmd_params->l_col_filename);
               break;
 
           case 'b':
@@ -421,7 +422,7 @@ parse_args(int argc, char ** argv, cmdparam_t * cmd_params)
         	  //strcpy(cmd_params->r_col_filename, "/home/zeroxwj/Desktop/AllCode/CWI_imps_join/workspace/scripts/tpch100g_query_data_extract/");
               //strncat(cmd_params->r_col_filename, optarg, 128);
               //printf("%s\n", cmd_params->r_col_filename);
-        	  printf("%s\n", optarg);
+        	  //printf("%s\n", optarg);
         	  sprintf(cmd_params->r_col_filename, "%s%s", DATAPATH, optarg);
               break;
 

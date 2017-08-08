@@ -8,11 +8,11 @@
 #ifndef HASHTABLE_H_
 #define HASHTABLE_H_
 
-//#define _IDHASH_ 1
-#define _FIBHASH_ 1
+#define _IDHASH_ 1
+//#define _FIBHASH_ 1
 
 typedef struct  {
-    uint32_t hash;
+    uint32_t hash; /* to indicate whether this entry is empty or not */
     uint64_t oid;
 }HTEntry ;
 
@@ -42,7 +42,7 @@ typedef struct {
 		return (k & mask);
 	}
 	*/
-#define hashKey(KEY) (KEY & ht->mask)
+#define hashKey(KEY) ((KEY) & ht->mask)
 #define hashKey_imps(KEY, LMASK, HMASK) (((KEY) & LMASK) | HMASK)
 
 

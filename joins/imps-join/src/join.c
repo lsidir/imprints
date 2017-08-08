@@ -11,12 +11,13 @@
 #include "vector.h"
 
 const uint64_t oid_nil = 1ULL << (sizeof(uint64_t) * 8 - 1);
+const uint32_t hash_nil = 0xFFFFFFFF;
 
 #define INSERT_POS(H, P, O) 														\
 do {																				\
 	uint64_t pos = P;																\
-    while (ht->table[pos].hash														\
-            || (!__sync_bool_compare_and_swap(&ht->table[pos].hash, 0, H))) {		\
+    while ((ht->table[pos].hash != hash_nil)														\
+            || (!__sync_bool_compare_and_swap(&ht->table[pos].hash, hash_nil, H))) {		\
         pos = (pos + 1) & ht->mask;													\
     }																				\
     ht->table[pos].oid = O;															\
@@ -37,11 +38,11 @@ do {											\
 #define LOOKUP_POS(P, K) 														\
 do {																			\
 	uint64_t pos = P;															\
-    while ((ht->table[pos].hash) && (colRValues[ht->table[pos].oid] != K)) {	\
+    while ((ht->table[pos].hash != hash_nil) && (colRValues[ht->table[pos].oid] != K)) {	\
         pos = (pos + 1) & ht->mask;												\
     }																			\
 																				\
-    found_tuple_oid = ht->table[pos].hash ? ht->table[pos].oid : oid_nil;		\
+    found_tuple_oid = (ht->table[pos].hash != hash_nil) ? ht->table[pos].oid : oid_nil;		\
 } while (0)
 
 #define GETBIN(Z,V,B,S,X)				\
@@ -81,7 +82,7 @@ void* run_multipass(void *arg) {
 	if (threadId == 0) {
 		VERBOSE fprintf(stdout, "HT: initializing memory in thread 0\n");
 		ht->table = (HTEntry *) malloc_aligned(htSize);
-		memset(ht->table, 0, htSize);
+		memset(ht->table, 0xFF, htSize);
 	}
 	BARRIER_ARRIVE(barrier, rv);
 
@@ -347,7 +348,7 @@ void* run_orderlist(void *arg) {
 	if (threadId == 0) {
 		VERBOSE fprintf(stdout, "HT: initializing memory in thread 0\n");
 		ht->table = (HTEntry *) malloc_aligned(htSize);
-		memset(ht->table, 0, htSize);
+		memset(ht->table, 0xFF, htSize);
 	}
 	BARRIER_ARRIVE(barrier, rv);
 
@@ -653,8 +654,9 @@ void* run_default(void *arg) {
 	if (threadId == 0) {
 		VERBOSE fprintf(stdout, "HT: initializing memory in thread 0\n");
 		ht->table = (HTEntry *) malloc_aligned(htSize);
-		memset(ht->table, 0, htSize);
+		memset(ht->table, 0xFF, htSize);
 	}
+	printf("first value: %04x, hash_nil: %04x\n", ht->table[0].hash, hash_nil);
 	BARRIER_ARRIVE(barrier, rv);
 
 #define BUILD(T) {																							\
@@ -704,9 +706,9 @@ void* run_default(void *arg) {
 
     	/* build phase ------------------------------------------------------------------*/
     	switch (colR->coltype) {
-    		case TYPE_sht: BUILD(short); break;
+    		//case TYPE_sht: BUILD(short); break;
     		case TYPE_int: BUILD(int); break;
-    		case TYPE_lng: BUILD(long); break;
+    		//case TYPE_lng: BUILD(long); break;
     		default: break;
     	}
 
@@ -748,7 +750,9 @@ void* run_default(void *arg) {
 			const uint64_t cacheIndex = i & cacheMask;																\
 			uint64_t found_tuple_oid = oid_nil;																		\
 			LOOKUP_POS(cache[cacheIndex].pos, colLValues[i]);														\
-			count += (found_tuple_oid != oid_nil);																	\
+			DEBUG if (found_tuple_oid == oid_nil) fprintf(stdout, "probe failed:%d\n", colLValues[i]);\
+        \
+        	count += (found_tuple_oid != oid_nil);																	\
 																													\
 			/* prefetching	*/																						\
 			HASH(colLValues[prefetchIndex], cache[cacheIndex]);														\
@@ -770,9 +774,9 @@ void* run_default(void *arg) {
     uint64_t count = 0;
     // probe phase ------------------------------------------------------------------
 	switch (colL->coltype) {
-		case TYPE_sht: PROBE(short); break;
+		//case TYPE_sht: PROBE(short); break;
 		case TYPE_int: PROBE(int); break;
-		case TYPE_lng: PROBE(long); break;
+		//case TYPE_lng: PROBE(long); break;
 		default: break;
 	}
 	matches[threadId] = count;
@@ -787,7 +791,7 @@ void* run_default(void *arg) {
     	timer_stop(&probe_timer);
     	printf("[INFO] PROBE phase takes %lf ms\n", GetMilliSeconds(&probe_timer));
 
-    	//fprintf(stdout, "count:%ld\n", count);
+    	DEBUG fprintf(stdout, "count:%ld\n", count);
 	}
 	return NULL;
 }

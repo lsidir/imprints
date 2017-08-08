@@ -134,7 +134,7 @@ void* run_multipass(void *arg) {
         for (uint64_t i = endIndexPrefetch; i < endIndex; i++) {											\
             const uint64_t cacheIndex = i & cacheMask;														\
             INSERT_POS(cache[cacheIndex].hash, cache[cacheIndex].pos, i);									\
-            /* INSERT_POS(cache[cacheIndex].hash, cache[cacheIndex].pos, i); */								\
+            																								\
         }																									\
         free(cache);																						\
 }
@@ -159,6 +159,21 @@ void* run_multipass(void *arg) {
         if (threadId == 0) {
         	gettimeofday(&build_timeval, NULL);
         }
+#define Aggregation_partition(T) {\
+		uint64_t part_num;\
+		uint64_t thread_assigned_count = colLCount / threadCount;\
+		uint64_t aggregate_sum = 0;\
+		uint32_t hash;\
+		int successful = 0;\
+        for (int i = 0; i < thread_assigned_count; ++i) {\
+        	hash = HASH(colLValue[i]);\
+        	successful = (hash != hash_nil);\
+        	if (successful) {\
+        		aggregate_sum += table[hash].payload;\
+        	}\
+        }\
+}\
+
 
 #define PROBE_MULTIPASS(T) {																						\
     	T  *restrict colLValues = (T *) colL->col;																	\
@@ -177,10 +192,11 @@ void* run_multipass(void *arg) {
 		unsigned int left_shift = __builtin_popcount(ht->mask) - imps_bits;									\
 		uint64_t highermask = 0; 																			\
 		unsigned long bin = 0; 																				\
+		unsigned int right_shift = __builtin_popcount(ht->mask) + imps_bits;										\
         																											\
         PrefetchCache *cache = (PrefetchCache *) malloc_aligned(PREFETCH_OFFSET * sizeof(PrefetchCache));			\
         const uint64_t cacheMask = (1 << unsignedLog2(PREFETCH_OFFSET)) - 1;										\
-        																											\
+        const uint64_t cacheMaskRight = (1 << unsignedLog2(PREFETCH_OFFSET * 2)) - 1;																											\
 																										\
 		for (uint32_t i = startIndex; i < startIndex + PREFETCH_OFFSET; i++) {										\
 			const uint64_t cacheIndex = i & cacheMask;																\
@@ -188,16 +204,17 @@ void* run_multipass(void *arg) {
 			__builtin_prefetch(&ht->table[cache[cacheIndex].pos], 0, 1);											\
 		}																											\
 																													\
-																													\
 		uint64_t prefetchIndex = startIndex + PREFETCH_OFFSET; 														\
 		const uint64_t endIndexPrefetch = endIndex - PREFETCH_OFFSET;												\
+		const uint64_t startIndexPrefetch = startIndex;																\
+		const uint64_t middlePrefetch = (endIndex - startIndex) / 2;												\
 		for (uint64_t i = startIndex; i < endIndexPrefetch; i++) {													\
 			/* re-use hash values and position, which have been already computed during prefetching */				\
 			const uint64_t cacheIndex = i & cacheMask;																\
 			uint64_t found_tuple_oid = oid_nil;																		\
 			LOOKUP_POS(cache[cacheIndex].pos, colLValues[i]);														\
+			uint64_t found_oid = oid_nil;																			\
 			count += (found_tuple_oid != oid_nil);																	\
-																													\
 																													\
 			HASH(colLValues[prefetchIndex], cache[cacheIndex]);														\
 			__builtin_prefetch(&ht->table[cache[cacheIndex].pos], 0, 1);											\
@@ -208,10 +225,10 @@ void* run_multipass(void *arg) {
 			uint64_t found_tuple_oid = oid_nil;																		\
 			LOOKUP_POS(cache[cacheIndex].pos, colLValues[i]);														\
 			count += (found_tuple_oid != oid_nil);																	\
+			count++;\
 		}																											\
 		free(cache);																								\
     }
-
 
     BARRIER_ARRIVE(barrier, rv);
 
@@ -316,7 +333,6 @@ void* run_visitlist(void *arg) {
             INSERT_POS(cache[cacheIndex].hash, cache[cacheIndex+i].pos, i);																								\
             																				\
 																							\
-																							\
 			GETBIN(bin, colRValues[prefetchIndex], B, step, X);												\
 			highermask = bin << left_shift;																	\
             HASH_IMPS(colRValues[prefetchIndex], cache[cacheIndex], lowermask, highermask);					\
@@ -391,7 +407,7 @@ void* run_visitlist(void *arg) {
 																													\
 																													\
 																													\
-
+\
 		/* probe [0 .. n - prefetchOffset)*/																		\
 		uint64_t prefetchIndex = startIndex + PREFETCH_OFFSET; 														\
 		const uint64_t endIndexPrefetch = endIndex - PREFETCH_OFFSET;												\
