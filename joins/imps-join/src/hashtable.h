@@ -8,13 +8,14 @@
 #ifndef HASHTABLE_H_
 #define HASHTABLE_H_
 
-#define _IDHASH_ 1
+//#define _IDHASH_ 1
 //#define _FIBHASH_ 1
+#define _MONETDBHASH_ 1
 
 typedef struct  {
     uint32_t hash; /* to indicate whether this entry is empty or not */
     uint64_t oid;
-}HTEntry ;
+}HTEntry;
 
 typedef struct {
     uint64_t mask;
@@ -44,6 +45,18 @@ typedef struct {
 	*/
 #define hashKey(KEY) ((KEY) & ht->mask)
 #define hashKey_imps(KEY, LMASK, HMASK) (((KEY) & LMASK) | HMASK)
+
+#elif defined(_MONETDBHASH_)
+
+#define mix_int(X)	(((unsigned int) (X) >> 7) ^	\
+			 ((unsigned int) (X) >> 13) ^	\
+			 ((unsigned int) (X) >> 21) ^	\
+			 (unsigned int) (X))
+
+#define hash_int(H,V)	((BUN) mix_int(*(const unsigned int *) (V)) & (H)->mask)
+
+#define hashKey(KEY) (mix_int(KEY) & ht->mask)
+#define hashKey_imps(KEY, LMASK, HMASK) (((mix_int(KEY)) & LMASK) | HMASK)
 
 
 #elif defined(_FIBHASH_)

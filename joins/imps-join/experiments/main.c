@@ -126,10 +126,12 @@ main(int argc, char *argv[])
 	strcpy(colR->colname, "colR");
 	//strcpy(colR->filename, argv[3]);
 	//strcpy(colR->typename, argv[1]);
-    colR->coltype  = TYPE_int;	 // use integer by default in microbenchmark
+    colR->coltype  = (cmd_params.typesize == 4) ? TYPE_int : TYPE_lng;	 // use integer by default in microbenchmark
     colR->typesize = cmd_params.typesize;
-    colR->min.ival = INT_MAX;
-    colR->max.ival = INT_MIN;
+    //colR->min.ival = INT_MAX;
+    //colR->max.ival = INT_MIN;
+    colR->min.lval = LONG_MAX;
+    colR->max.lval = LONG_MIN;
     colR->imps_idx = NULL;
 
     colR->col = NULL;
@@ -172,10 +174,12 @@ main(int argc, char *argv[])
 	strcpy(colL->colname, "colL");
 	//strcpy(colL->filename, argv[3]);
 	//strcpy(colL->typename, argv[1]);
-    colL->coltype  = TYPE_int;	 // use integer by default in microbenchmark
+    colL->coltype  = (cmd_params.typesize == 4) ? TYPE_int : TYPE_lng;	 // use integer by default in microbenchmark
     colL->typesize = cmd_params.typesize;
-    colL->min.ival = INT_MAX;
-    colL->max.ival = INT_MIN;
+    //colL->min.ival = INT_MAX;
+    //colL->max.ival = INT_MIN;
+    colL->min.lval = LONG_MAX;
+    colL->max.lval = LONG_MIN;
     colL->imps_idx = NULL;
 
     assert(colL->coltype == colR->coltype);
@@ -339,6 +343,7 @@ parse_args(int argc, char ** argv, cmdparam_t * cmd_params)
                 /* columns file name */
                 {"l-filename",  required_argument, 0, 'p'},	/*l=>probe*/
                 {"r-filename",  required_argument, 0, 'b'},	/*r=>build*/
+				{"typesize", required_argument, 0, 't'},
                 {"l-size",  required_argument, 0, 'l'},
                 {"r-size",  required_argument, 0, 'r'},
                 /*{"perfout", required_argument, 0, 'o'},*/
@@ -349,7 +354,7 @@ parse_args(int argc, char ** argv, cmdparam_t * cmd_params)
         /* getopt_long stores the option index here. */
         int option_index = 0;
 
-        c = getopt_long (argc, argv, "h:m:a:n:p:b:l:r:x:y:z",
+        c = getopt_long (argc, argv, "h:m:a:n:p:b:t:l:r:x:y:z",
                          long_options, &option_index);
 
         /* Detect the end of the options. */
@@ -424,6 +429,11 @@ parse_args(int argc, char ** argv, cmdparam_t * cmd_params)
               //printf("%s\n", cmd_params->r_col_filename);
         	  //printf("%s\n", optarg);
         	  sprintf(cmd_params->r_col_filename, "%s%s", DATAPATH, optarg);
+              break;
+
+          case 't':
+              cmd_params->typesize = atoi(optarg);
+              printf("typesize: %d\n", cmd_params->typesize);
               break;
 
           default:

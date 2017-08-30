@@ -274,8 +274,8 @@ void* run_multipass(void *arg) {
 
 #define PROBE_HT(X)\
 		do {/*need to replace INT_MIN and INT_MAX somehow */\
-			lbound = (partid_lb == 0) ? INT_MIN : bounds[partid_lb].X;\
-			hbound = (partid_ub == 63) ? INT_MAX : bounds[partid_ub + 1].X;\
+			lbound = (partid_lb == 0) ? LONG_MIN : bounds[partid_lb].X;\
+			hbound = (partid_ub == 63) ? LONG_MAX : bounds[partid_ub + 1].X;\
 			if ((colLValues[valueid] >= lbound) && (colLValues[valueid] < hbound)) {		\
 				/*GETBIN_RANGE(bin, *(const TYPE*)v, partid_lb, partid_ub);*/	\
 				/*value_checked[valueid] = 1;*/\
@@ -297,8 +297,8 @@ void* run_multipass(void *arg) {
     // probe phase ------------------------------------------------------------------
 	switch (colL->coltype) {
 		//case TYPE_sht: PROBE_MULTIPASS(short, sval); break;
-		case TYPE_int: PROBE_MULTIPASS(int, ival); break;
-		//case TYPE_lng: PROBE_MULTIPASS(long, lval); break;
+		//case TYPE_int: PROBE_MULTIPASS(int, ival); break;
+		case TYPE_lng: PROBE_MULTIPASS(long, lval); break;
 		default: break;
 	}
 	matches[threadId] = count;
@@ -452,6 +452,7 @@ void* run_orderlist(void *arg) {
 		uint64_t icnt = 0;	\
 		uint64_t top_icnt = 0;\
 		uint32_t cache_cnt = 0;\
+		uint32_t start_cache_cnt = startIndex / vpc;\
 		uint64_t valueid;\
 		uint64_t valueid_lim;\
 		Imprints_index * l_imps_idx = colL->imps_idx;														\
@@ -471,8 +472,9 @@ void* run_orderlist(void *arg) {
         uint64_t position = 0; 																				\
         uint64_t found_tuple_oid = 0; 																				\
         unsigned int valid_blks = 0;																											\
-        int i, cache_cnt_iter, lpos;\
+        int i, cache_cnt_iter, lpos, exclusive_cnt = 0;\
         timer_start(&lvisit_timer);\
+        uint8_t* is_exclusive = (uint8_t *) malloc_aligned(num_cacheline_per_thread * sizeof(uint8_t));\
         Array * lvisit = (Array *) malloc_aligned(partn * sizeof(Array));\
         for (i = 0; i < partn; ++i) {\
         	initArray(lvisit + i, num_cacheline_per_thread / partn);\
@@ -499,6 +501,12 @@ void* run_orderlist(void *arg) {
 					for (i = 0; i < partn; ++i) {\
 						if (pattern & im[icnt]) {\
 							insertArray(lvisit + i, cache_cnt);\
+							/* judge is exclusive for this pattern */\
+							assert((cache_cnt >= start_cache_cnt) && ((cache_cnt - start_cache_cnt) < num_cacheline_per_thread));\
+							/*assert(!((~pattern) & im[icnt]));*/\
+							/*if ((~pattern) & im[icnt]) {printf("not exclusive:%d: %04lx\n", cache_cnt, im[icnt]);}*/\
+							exclusive_cnt += (!((~pattern) & im[icnt]));\
+        					is_exclusive[cache_cnt - start_cache_cnt] = !((~pattern) & im[icnt]);\
 						}\
 						pattern = pattern << pattern_bit;\
 					}\
@@ -512,6 +520,7 @@ void* run_orderlist(void *arg) {
 								cache_cnt_iter < cache_cnt + valid_blks;\
 								++cache_cnt_iter) {\
 							insertArray(lvisit + i, cache_cnt_iter);\
+							is_exclusive[cache_cnt_iter - start_cache_cnt] = !((~pattern) & im[icnt]);\
 						}\
 					}\
 					pattern = pattern << pattern_bit;\
@@ -522,17 +531,26 @@ void* run_orderlist(void *arg) {
 		}\
 		timer_stop(&lvisit_timer);\
 		printf("[INFO] Create visit list takes %lf ms\n", GetMilliSeconds(&lvisit_timer));\
+		DEBUG printf("exclusive percentage: %lf\n", 1.0*exclusive_cnt / num_cacheline_per_thread);\
 		\
         /* probing according to the visit list */\
+		icnt = 0;\
         for (super_partid = 0; super_partid < partn; ++super_partid) {\
         	partid_lb = super_partid * pattern_bit;\
         	partid_ub = (super_partid + 1) * pattern_bit - 1;\
         	for (lpos = 0; lpos < lvisit[super_partid].used; ++lpos) {\
-        		valueid = lvisit[super_partid].array[lpos] * vpc;\
+        		icnt = lvisit[super_partid].array[lpos];\
+        		valueid = icnt * vpc;\
         		valueid_lim = valueid + vpc;\
         		valueid_lim = valueid_lim > endIndex ? endIndex : valueid_lim;\
-        		for (; valueid < valueid_lim; valueid++) {\
-        			PROBE_HT(X);\
+        		if (is_exclusive[icnt - start_cache_cnt]) {\
+					for (; valueid < valueid_lim; valueid++) {\
+						PROBE_HT_EXCLUSIVE(X);\
+					}\
+        		} else {\
+					for (; valueid < valueid_lim; valueid++) {\
+						PROBE_HT(X);\
+					}\
         		}\
         	}\
         }\
@@ -541,7 +559,22 @@ void* run_orderlist(void *arg) {
 			freeArray(lvisit + i);\
 		}\
 		free(lvisit);\
+		free(is_exclusive);\
     }
+
+#define PROBE_HT_EXCLUSIVE(X)\
+		do {/*need to replace INT_MIN and INT_MAX somehow */\
+			/*GETBIN_RANGE(bin, *(const TYPE*)v, partid_lb, partid_ub);*/	\
+			/*value_checked[valueid] = 1;*/\
+			/*probenum++;*/\
+			bin = super_partid;					\
+			highermask = bin << left_shift;		\
+			position = hashKey_imps(colLValues[valueid], lowermask, highermask) & ht->mask;	\
+			found_tuple_oid = oid_nil;\
+			LOOKUP_POS(position, colLValues[valueid]);\
+			/*assert(found_tuple_oid != oid_nil);*/\
+			count += (found_tuple_oid != oid_nil);\
+		} while (0)
 
     BARRIER_ARRIVE(barrier, rv);
 
@@ -549,8 +582,8 @@ void* run_orderlist(void *arg) {
     // probe phase ------------------------------------------------------------------
 	switch (colL->coltype) {
 		//case TYPE_sht: PROBE_ORDERLIST(short, sval); break;
-		case TYPE_int: PROBE_ORDERLIST(int, ival); break;
-		//case TYPE_lng: PROBE_ORDERLIST(long, lval); break;
+		//case TYPE_int: PROBE_ORDERLIST(int, ival); break;
+		case TYPE_lng: PROBE_ORDERLIST(long, lval); break;
 		default: break;
 	}
 	matches[threadId] = count;
@@ -656,7 +689,171 @@ void* run_default(void *arg) {
 		ht->table = (HTEntry *) malloc_aligned(htSize);
 		memset(ht->table, 0xFF, htSize);
 	}
-	printf("first value: %04x, hash_nil: %04x\n", ht->table[0].hash, hash_nil);
+	DEBUG printf("first value: %04x, hash_nil: %04x\n", ht->table[0].hash, hash_nil);
+	BARRIER_ARRIVE(barrier, rv);
+
+#define BUILD(T) {																							\
+        const uint64_t per_thread = colRCount / threadCount;												\
+        const uint64_t startIndex = threadId * per_thread;													\
+        const uint64_t endIndex = ((threadId == threadCount - 1) ? colRCount : (threadId + 1) * per_thread);\
+        																									\
+        T  *restrict colRValues = (T *) colR->col;															\
+																											\
+        PrefetchCache *cache = (PrefetchCache *) malloc_aligned(PREFETCH_OFFSET * sizeof(PrefetchCache));	\
+        const uint64_t cacheMask = PREFETCH_OFFSET - 1;														\
+        																									\
+        /* fill cache*/																						\
+        for (uint32_t i = startIndex; i < startIndex + PREFETCH_OFFSET; i++) {								\
+            const uint64_t cacheIndex = i & cacheMask;														\
+            HASH(colRValues[i], cache[cacheIndex]);															\
+            __builtin_prefetch(&ht->table[cache[cacheIndex].pos], 1, 1);									\
+        }																									\
+																											\
+        /* build - [startIndex ... endIndex - prefetchOffset)	*/											\
+        uint64_t prefetchIndex = startIndex + PREFETCH_OFFSET;    											\
+        const uint64_t endIndexPrefetch = endIndex - PREFETCH_OFFSET;										\
+        for (uint64_t i = startIndex; i < endIndexPrefetch; i++) {											\
+            /* re-use hash values and positions, which have been already computed*/							\
+            const uint64_t cacheIndex = i & cacheMask;														\
+            INSERT_POS(cache[cacheIndex].hash, cache[cacheIndex].pos, i);									\
+            																								\
+            /* prefetching*/																				\
+            HASH(colRValues[prefetchIndex], cache[cacheIndex]);												\
+            __builtin_prefetch(&ht->table[cache[cacheIndex].pos], 1, 1);									\
+            prefetchIndex++;																				\
+        }																									\
+        for (uint64_t i = endIndexPrefetch; i < endIndex; i++) {											\
+            const uint64_t cacheIndex = i & cacheMask;														\
+            INSERT_POS(cache[cacheIndex].hash, cache[cacheIndex].pos, i);									\
+        }																									\
+        free(cache);																						\
+}
+
+    	//struct timeval start_timeval, build_timeval;
+		HybridTimer build_timer;
+		HybridTimer probe_timer;
+        if (threadId == 0) {
+        	//gettimeofday(&start_timeval, NULL);
+        	timer_start(&build_timer);
+        }
+
+    	/* build phase ------------------------------------------------------------------*/
+    	switch (colR->coltype) {
+    		//case TYPE_sht: BUILD(short); break;
+    		case TYPE_int: BUILD(int); break;
+    		case TYPE_lng: BUILD(long); break;
+    		default: break;
+    	}
+
+        //syncThreads();
+        BARRIER_ARRIVE(barrier, rv);
+
+        if (threadId == 0) {
+        	//gettimeofday(&build_timeval, NULL);
+        	timer_stop(&build_timer);
+        	printf("[INFO] BUILD phase takes %lf ms\n", GetMilliSeconds(&build_timer));
+        	timer_start(&probe_timer);
+        }
+
+#define PROBE(T) {																									\
+    	T  *restrict colLValues = (T *) colL->col;																	\
+    	T  *restrict colRValues = (T *) colR->col;																	\
+        const uint64_t per_thread = colLCount / threadCount;														\
+        const uint64_t startIndex = threadId * per_thread;															\
+        const uint64_t endIndex = ((threadId == threadCount - 1) ? colLCount : (threadId + 1) * per_thread);		\
+        /*uint64_t count = 0;*/																						\
+        /*uint64_t preJoinCount = 0;			*/																	\
+        /*double checksum = 0;					*/																	\
+        																											\
+        PrefetchCache *cache = (PrefetchCache *) malloc_aligned(PREFETCH_OFFSET * sizeof(PrefetchCache));			\
+        const uint64_t cacheMask = (1 << unsignedLog2(PREFETCH_OFFSET)) - 1;										\
+        																											\
+		/* fill cache*/																								\
+		for (uint32_t i = startIndex; i < startIndex + PREFETCH_OFFSET; i++) {										\
+			const uint64_t cacheIndex = i & cacheMask;																\
+			HASH(colLValues[i], cache[cacheIndex]);																	\
+			__builtin_prefetch(&ht->table[cache[cacheIndex].pos], 0, 1);											\
+		}																											\
+																													\
+		/* probe [0 .. n - prefetchOffset)*/																		\
+		uint64_t prefetchIndex = startIndex + PREFETCH_OFFSET; 														\
+		const uint64_t endIndexPrefetch = endIndex - PREFETCH_OFFSET;												\
+		for (uint64_t i = startIndex; i < endIndexPrefetch; i++) {													\
+			/* re-use hash values and position, which have been already computed during prefetching */				\
+			const uint64_t cacheIndex = i & cacheMask;																\
+			uint64_t found_tuple_oid = oid_nil;																		\
+			LOOKUP_POS(cache[cacheIndex].pos, colLValues[i]);														\
+			/*DEBUG if (found_tuple_oid == oid_nil) fprintf(stdout, "probe failed:%d\n", colLValues[i]);*/\
+        \
+        	count += (found_tuple_oid != oid_nil);																	\
+																													\
+			/* prefetching	*/																						\
+			HASH(colLValues[prefetchIndex], cache[cacheIndex]);														\
+			__builtin_prefetch(&ht->table[cache[cacheIndex].pos], 0, 1);											\
+			prefetchIndex++;																						\
+		}																											\
+		for (uint64_t i = endIndexPrefetch; i < endIndex; i++) {													\
+			const uint64_t cacheIndex = i & cacheMask;																\
+			uint64_t found_tuple_oid = oid_nil;																		\
+			LOOKUP_POS(cache[cacheIndex].pos, colLValues[i]);														\
+			count += (found_tuple_oid != oid_nil);																	\
+		}																											\
+		free(cache);																								\
+    }
+
+
+    BARRIER_ARRIVE(barrier, rv);
+
+    uint64_t count = 0;
+    // probe phase ------------------------------------------------------------------
+	switch (colL->coltype) {
+		//case TYPE_sht: PROBE(short); break;
+		case TYPE_int: PROBE(int); break;
+		case TYPE_lng: PROBE(long); break;
+		default: break;
+	}
+	matches[threadId] = count;
+
+	BARRIER_ARRIVE(barrier, rv);
+
+    free(threadArgs);
+
+	if (threadId == 0) {
+		free(ht->table);
+
+    	timer_stop(&probe_timer);
+    	printf("[INFO] PROBE phase takes %lf ms\n", GetMilliSeconds(&probe_timer));
+
+    	DEBUG fprintf(stdout, "count:%ld\n", count);
+	}
+	return NULL;
+}
+
+void* run_default_no_prefetching(void *arg) {
+
+	JoinThreadArgs* threadArgs = (JoinThreadArgs*)(arg);
+
+	unsigned int threadId = threadArgs->threadId;
+	unsigned int threadCount = threadArgs->threadCount;
+	Column* colL = threadArgs->colL;
+	Column* colR = threadArgs->colR;
+	HashTable * ht = threadArgs->ht;
+	pthread_barrier_t * barrier = threadArgs->barrier;
+
+	uint64_t* matches = threadArgs->matches;
+
+	unsigned long colLCount = colL->colcount;
+	unsigned long colRCount = colR->colcount;
+
+	int rv;
+
+	/* initialize hash table */
+	uint64_t htSize = ht->nBuckets * sizeof(HTEntry);
+	if (threadId == 0) {
+		VERBOSE fprintf(stdout, "HT: initializing memory in thread 0\n");
+		ht->table = (HTEntry *) malloc_aligned(htSize);
+		memset(ht->table, 0xFF, htSize);
+	}
 	BARRIER_ARRIVE(barrier, rv);
 
 #define BUILD(T) {																							\
@@ -722,7 +919,7 @@ void* run_default(void *arg) {
         	timer_start(&probe_timer);
         }
 
-#define PROBE(T) {																									\
+#define PROBE_NO_PREFETCH(T) {																									\
     	T  *restrict colLValues = (T *) colL->col;																	\
     	T  *restrict colRValues = (T *) colR->col;																	\
         const uint64_t per_thread = colLCount / threadCount;														\
@@ -731,41 +928,22 @@ void* run_default(void *arg) {
         /*uint64_t count = 0;*/																						\
         /*uint64_t preJoinCount = 0;			*/																	\
         /*double checksum = 0;					*/																	\
-        																											\
-        PrefetchCache *cache = (PrefetchCache *) malloc_aligned(PREFETCH_OFFSET * sizeof(PrefetchCache));			\
-        const uint64_t cacheMask = (1 << unsignedLog2(PREFETCH_OFFSET)) - 1;										\
-        																											\
-		/* fill cache*/																								\
-		for (uint32_t i = startIndex; i < startIndex + PREFETCH_OFFSET; i++) {										\
-			const uint64_t cacheIndex = i & cacheMask;																\
-			HASH(colLValues[i], cache[cacheIndex]);																	\
-			__builtin_prefetch(&ht->table[cache[cacheIndex].pos], 0, 1);											\
-		}																											\
+        PrefetchCache cacheEntry;																					\
+																											\
 																													\
-		/* probe [0 .. n - prefetchOffset)*/																		\
-		uint64_t prefetchIndex = startIndex + PREFETCH_OFFSET; 														\
-		const uint64_t endIndexPrefetch = endIndex - PREFETCH_OFFSET;												\
-		for (uint64_t i = startIndex; i < endIndexPrefetch; i++) {													\
+		\
+		for (uint64_t i = startIndex; i < endIndex; i++) {													\
 			/* re-use hash values and position, which have been already computed during prefetching */				\
-			const uint64_t cacheIndex = i & cacheMask;																\
+																			\
 			uint64_t found_tuple_oid = oid_nil;																		\
-			LOOKUP_POS(cache[cacheIndex].pos, colLValues[i]);														\
-			DEBUG if (found_tuple_oid == oid_nil) fprintf(stdout, "probe failed:%d\n", colLValues[i]);\
-        \
+			HASH(colLValues[i], cacheEntry);																		\
+			\
+			LOOKUP_POS(cacheEntry.pos, colLValues[i]);														\
+			DEBUG if (found_tuple_oid == oid_nil) fprintf(stdout, "probe failed:%d\n", colLValues[i]);				\
+																													\
         	count += (found_tuple_oid != oid_nil);																	\
 																													\
-			/* prefetching	*/																						\
-			HASH(colLValues[prefetchIndex], cache[cacheIndex]);														\
-			__builtin_prefetch(&ht->table[cache[cacheIndex].pos], 0, 1);											\
-			prefetchIndex++;																						\
 		}																											\
-		for (uint64_t i = endIndexPrefetch; i < endIndex; i++) {													\
-			const uint64_t cacheIndex = i & cacheMask;																\
-			uint64_t found_tuple_oid = oid_nil;																		\
-			LOOKUP_POS(cache[cacheIndex].pos, colLValues[i]);														\
-			count += (found_tuple_oid != oid_nil);																	\
-		}																											\
-		free(cache);																								\
     }
 
 
@@ -775,7 +953,7 @@ void* run_default(void *arg) {
     // probe phase ------------------------------------------------------------------
 	switch (colL->coltype) {
 		//case TYPE_sht: PROBE(short); break;
-		case TYPE_int: PROBE(int); break;
+		case TYPE_int: PROBE_NO_PREFETCH(int); break;
 		//case TYPE_lng: PROBE(long); break;
 		default: break;
 	}
@@ -920,15 +1098,21 @@ query_result_t hashjoin(Column * colL, Column * colR, unsigned int threadCount, 
 		threadArgs->matches	= matches;
 		threadArgs->num_cacheline_per_thread = num_cacheline_per_thread;
 		switch(joinCfg.joinalgo) {
-		case 0:	//defaults
+		case 0:	//default
+			printf("[INFO] start default hash-join\n");
 			pthread_create(&threads[i], NULL, run_default, (void*)threadArgs);
 			break;
 		case 1:	//multi-pass
+			printf("[INFO] start imps-hashjoin with multipass\n");
 			pthread_create(&threads[i], NULL, run_multipass, (void*)threadArgs);
 			break;
 		case 2:	//order-list
+			printf("[INFO] start imps-hashjoin with orderlist\n");
 			pthread_create(&threads[i], NULL, run_orderlist, (void*)threadArgs);
 			break;
+		case 3: //default with no prefetching
+			printf("[INFO] start default hash-join without prefetching\n");
+			pthread_create(&threads[i], NULL, run_default_no_prefetching, (void*)threadArgs);
 		default:
 			break;
 		}

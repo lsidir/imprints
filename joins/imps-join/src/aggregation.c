@@ -293,7 +293,7 @@ void* run_visitlist(void *arg) {
         const uint64_t per_thread = colRCount / threadCount;												\
         const uint64_t startIndex = threadId * per_thread;													\
         const uint64_t endIndex = ((threadId == threadCount - 1) ? colRCount : (threadId + 1) * per_thread);\
-        const uint64_t midIndex = 1;\
+        const uint64_t midIndex = 1;																		\
         																									\
         T  *restrict colRValues = (T *) colR->col;															\
         																									\
@@ -388,6 +388,12 @@ void* run_visitlist(void *arg) {
         const unsigned int maxpart = 64;																			\
         						\
         for (; super_partid < )										\
+		\
+		\
+		\
+		\
+		\
+		\
         																											\
 		/* fill cache*/																								\
 		for (uint32_t i = startIndex; i < startIndex + PREFETCH_OFFSET; i++) {										\

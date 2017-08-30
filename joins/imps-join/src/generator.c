@@ -163,6 +163,7 @@ int create_column_nonunique(Column *column, const int32_t maxid)
     return 0;
 }
 
+#if 0
 int
 ReadColumnFromFile(Column *column, char * filename)
 {
@@ -177,6 +178,30 @@ ReadColumnFromFile(Column *column, char * filename)
 
 	while (fgets(line, sizeof(line), file)) {
 		column_values[count] = atoi(line);
+		count++;
+	}
+	assert(count == column->colcount);
+
+	fclose(file);
+
+	return 0;
+}
+#endif
+
+int
+ReadColumnFromFile(Column *column, char * filename)
+{
+	long  *restrict column_values = (long *) column->col;	// all regard as integers for now
+	FILE* file = fopen(filename, "r");
+	if (file == NULL) {
+		printf("[ERROR] Failed to open column file %s\n", filename);
+		exit(EXIT_SUCCESS);
+	}
+	char line[256];
+	unsigned long count = 0;
+
+	while (fgets(line, sizeof(line), file)) {
+		column_values[count] = atol(line);
 		count++;
 	}
 	assert(count == column->colcount);
