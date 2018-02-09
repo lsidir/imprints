@@ -39,7 +39,7 @@ port (
 
 	out_data : out std_logic_vector(DATA_WIDTH-1 downto 0);                    -- output data is same as input
 	out_data_valid : out std_logic;                                            -- output data valid same as input
-	out_pos : out std_logic_vector(POS_WIDTH-1 downto 0);                      -- output new position (input position + new result)
+	out_pos : out std_logic_vector(POS_WIDTH-1 downto 0));                      -- output new position (input position + new result)
 end comparator;
 
 architecture behavioral of comparator is
