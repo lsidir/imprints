@@ -1,4 +1,9 @@
+# This Source Code Form is subject to the terms of the Mozilla Public
+# License, v. 2.0. If a copy of the MPL was not distributed with this
+# file, You can obtain one at http://mozilla.org/MPL/2.0/.
+
 #!/bin/sh
+
 DATAPREFIX=/net/milan.da.cwi.nl/export/scratch2/lsidir/finger_dbfarm
 ./simd_imprints smallint 126584581 $DATAPREFIX/airtraffic/bat/03/344.tail .sys.ontime.Year.smallint
 ./simd_imprints tinyint 126584581 $DATAPREFIX/airtraffic/bat/07/744.tail .sys.ontime.Quarter.tinyint
