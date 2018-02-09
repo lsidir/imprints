@@ -25,6 +25,9 @@
 // POSSIBILITY OF SUCH DAMAGE.
 //****************************************************************************
 
+#ifndef RUNTIME_CLIENT
+#define RUNTIME_CLIENT
+
 #ifdef HARPv1
 	#include <aalsdk/AAL.h>
 	#include <aalsdk/xlRuntime.h>
@@ -94,3 +97,5 @@ public:
 	Runtime          m_Runtime;   // AAL Runtime
 	CSemaphore       m_Sem;       // For synchronizing with the AAL runtime.
 };
+
+#endif

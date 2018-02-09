@@ -25,6 +25,16 @@
 // POSSIBILITY OF SUCH DAMAGE.
 //****************************************************************************
 
+#include <sched.h>
+#include <sys/time.h>
+#include <sys/resource.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <stdint.h>
+#include <math.h>
+#include <limits.h>
+#include <pthread.h>
+
 #include "iFPGA.h"
 
 using namespace std;

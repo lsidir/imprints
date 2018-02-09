@@ -2,14 +2,14 @@ library ieee;
 use ieee.std_logic_1164.all;
 use ieee.numeric_std.all;
 
-entity my_fifo is
+entity fifo is
 generic(
   FIFO_WIDTH : integer;
   FIFO_DEPTH_BITS : integer;
   FIFO_ALMOSTFULL_THRESHOLD: integer);
 port(
   clk :    in std_logic;
-  reset_n :  in std_logic;
+  resetn :  in std_logic;
 
   we :    in std_logic;
   din :    in std_logic_vector(FIFO_WIDTH-1 downto 0);  
@@ -20,9 +20,9 @@ port(
   empty :    out std_logic;
   full :    out std_logic;
   almostfull: out std_logic);
-end my_fifo;
+end fifo;
 
-architecture behavioral of my_fifo is
+architecture behavioral of fifo is
 
 constant FIFO_DEPTH : unsigned(FIFO_DEPTH_BITS-1 downto 0) := (others => '1');
 
@@ -92,7 +92,7 @@ if clk'event and clk = '1' then
 		almostfull <= '1';
 	end if;
 	bram_din <= din;
-	if reset_n ='0' then
+	if resetn ='0' then
 		rpointer <= (others => '0');
 		wpointer <= (others => '0');
 

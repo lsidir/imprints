@@ -25,15 +25,8 @@
 // POSSIBILITY OF SUCH DAMAGE.
 //****************************************************************************
 
-#include <sched.h>
-#include <sys/time.h>
-#include <sys/resource.h>
-#include <stdio.h>
-#include <stdlib.h>
-#include <stdint.h>
-#include <math.h>
-#include <limits.h>
-#include <pthread.h>
+#ifndef IFPGA
+#define IFPGA
 
 #include "RuntimeClient.h"
 
@@ -59,34 +52,38 @@
 	#define CSR_DST_ADDR				0x1a24
 	#define CSR_CTL						0x1a2c
 	#define CSR_CFG						0x1a34
-	#define CSR_CIPUCTL					0x280
-	#define CSR_NUM_LINES 				0x1a28
+	#define CSR_CIPUCTL					0x0208
 	#define DSM_STATUS_TEST_COMPLETE	0x40
 	#define CSR_AFU_DSM_BASEL			0x1a00
 	#define CSR_AFU_DSM_BASEH			0x1a04
-// Added by me
-	#define CSR_EXP_NUM_LINES			0x1a94
 	#define CSR_ADDR_RESET				0x1a80
 	#define CSR_READ_OFFSET				0x1a84
 	#define CSR_WRITE_OFFSET			0x1a88
-	#define CSR_DUMMY_KEY				0x1a8c
-	#define CSR_RADIX_BITS				0x1a90
+// Application specific registers
+	#define CSR_NUM_LINES 				0x1a28
+	#define CSR_MY_CONFIG1				0x1a94
+	#define CSR_MY_CONFIG2				0x1a8c
+	#define CSR_MY_CONFIG3				0x1a90
+	#define CSR_MY_CONFIG4				0x1a98
+	#define CSR_MY_CONFIG5				0x1a9c
 #else
 	#define CSR_SRC_ADDR				0x0120
 	#define CSR_DST_ADDR				0x0128
 	#define CSR_CTL						0x0138
 	#define CSR_CFG						0x0140
-	#define CSR_NUM_LINES				0x0130
 	#define DSM_STATUS_TEST_COMPLETE	0x40
 	#define CSR_AFU_DSM_BASEL			0x0110
 	#define CSR_AFU_DSM_BASEH			0x0114
-// Added by me
-	#define CSR_EXP_NUM_LINES			0x0200
 	#define CSR_ADDR_RESET				0x0208
 	#define CSR_READ_OFFSET				0x0210
 	#define CSR_WRITE_OFFSET			0x0218
-	#define CSR_DUMMY_KEY				0x0220
-	#define CSR_RADIX_BITS				0x0228
+// Added by me
+	#define CSR_NUM_LINES				0x0130
+	#define CSR_MY_CONFIG1				0x0200
+	#define CSR_MY_CONFIG2				0x0220
+	#define CSR_MY_CONFIG3				0x0228
+	#define CSR_MY_CONFIG4				0x0230
+	#define CSR_MY_CONFIG5				0x0238
 #endif
 
 static double get_time()
@@ -182,3 +179,5 @@ private:
 	btPhysAddr*    m_OutputPhys;     ///< Output workspace physical address.
 	btWSSize*      m_OutputSize;     ///< Output workspace size in bytes.
 };
+
+#endif
