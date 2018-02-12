@@ -1,9 +1,19 @@
-# simd_imprints
-simd enabled column imprints
+# imprints
+simd enabled column imprints for testing
 
-ToDo list:
+## How to compile
+
+Source files under `src/`. Header files under `include/`.
+
+```
+make
+```
+
+Executable file is `imprints`. Check also `run-all.sh` for an example.
+
+## ToDo list
+
 * fix a small bug on imprints queries, when the query is at the 0 bit.
-* split and name the files a bit better
-* maybe try to do simd WAH ?
+* (done-ish) split and name the files a bit better
+* maybe try to do simd WAH
 
-(leanfingerprint.c/h are to be ignored)
