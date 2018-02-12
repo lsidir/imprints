@@ -4,17 +4,10 @@
 
 #include "simd_imprints.h"
 
-/* auxilary variables used globaly */
-unsigned long pages;                            /* total pages in the column */
-int rpp;                                        /* rows per page */
-
 /* timing variables */
 long zone_create_time;
 long imprints_create_time;
 long simd_imprints_create_time;
-
-/* functions (in call order)-ish */
-Zonemap_index *create_zonemaps(Column *column);
 
 void queries(Column *column, Zonemap_index *zonemaps, Imprints_index *scalar_imps, Imprints_index *simd_imps, Imprints_index **exper_imps);
 void simd_queries(Column *column, Imprints_index *imps, ValRecord low, ValRecord high, long results);
@@ -27,7 +20,9 @@ int main(int argc, char **argv)
 	FILE *cfile;
 	long filesize;
 	size_t rd;
-	int stride[14] = {0,0,0,1,2,0,4,8,0,0,4,8,8,0};
+	int stride[14] = {0,0,0,1,2,0,4,8,0,0,4,8,8,0}; /* sizeof(column type) according to MonetDB */
+	unsigned long pages;                            /* total pages in the column */
+	int vpp;                                        /* values per page */
 	Zonemap_index *zonemaps;
 	Imprints_index *scalar_imps;
 	Imprints_index *simd_imps;
@@ -103,12 +98,12 @@ int main(int argc, char **argv)
 	}
 	fclose(cfile);
 
-	rpp = PAGESIZE/stride[column->coltype];
-	if (rpp == 0) {
+	vpp = PAGESIZE/stride[column->coltype];
+	if (vpp == 0) {
 		printf("rows per pages is 0\n");
 		return -1;
 	}
-	pages = column->colcount/rpp + 1;
+	pages = column->colcount/vpp + 1;
 	if (pages > MAX_IMPS) {
 		printf("there are too many pages %ld\n", pages);
 		return -1;
@@ -121,7 +116,7 @@ int main(int argc, char **argv)
 	             "records %ld "
 	             "pagesize %d "
 	             "sysconf(pagesize) %ld "
-	             "rpp %d "
+	             "values per page %d "
 	             "pages %ld\n",
 	             column->colname, column->filename,
 	             filesize,
@@ -130,13 +125,13 @@ int main(int argc, char **argv)
 	             column->colcount,
 	             PAGESIZE,
 	             sysconf(_SC_PAGESIZE),
-	             rpp,
+	             vpp,
 	             pages);
 
 	/* check if column is sorted and set sorted = 1 if it is */
 	isSorted(column);
 	/* create zonemaps */
-	zonemaps = create_zonemaps(column);
+	zonemaps = create_zonemaps(column, 64);
 	/* create scalar imprints */
 	scalar_imps = create_imprints(column, 64, 64, 0);
 	/* create equivelant simd imprints */
@@ -158,83 +153,6 @@ int main(int argc, char **argv)
 
 	VERBOSE printf("end of run\n");
 	return 1;
-}
-
-Zonemap_index *
-create_zonemaps(Column *column)
-{
-	Zonemap_index *zonemaps;
-	ValRecord val;
-	long i;
-	long t0;
-	int new = rpp-1; /*rpp is always power of 2*/
-
-	/* malloc zonemap array */
-	zonemaps = (Zonemap_index *) malloc(sizeof(Zonemap_index));
-	zonemaps->zmaps = (Zonemap *) malloc (sizeof(Zonemap)*(pages+1));
-	zonemaps->zonesize = rpp; /* FIX THIS EVERYWHERE */
-	memset((char *)zonemaps->zmaps, 0, sizeof(Zonemap)*(pages+1));
-
-#define upd(X) \
-		if (val.X < column->min.X) column->min.X = val.X; \
-		if (val.X > column->max.X) column->max.X = val.X; \
-		if (zonemaps->zmaps[zonemaps->zmaps_cnt].min.X > val.X) \
-			zonemaps->zmaps[zonemaps->zmaps_cnt].min.X = val.X; \
-		if (zonemaps->zmaps[zonemaps->zmaps_cnt].max.X < val.X) \
-			zonemaps->zmaps[zonemaps->zmaps_cnt].max.X = val.X;
-
-	t0 = usec();
-	zonemaps->zmaps_cnt = -1;
-	for (i=0; i < column->colcount; i++) {
-		if (!(i&new)) {
-			zonemaps->zmaps_cnt++;
-			switch (column->coltype) {
-			case TYPE_bte:
-				zonemaps->zmaps[zonemaps->zmaps_cnt].min.bval = 127;
-				zonemaps->zmaps[zonemaps->zmaps_cnt].max.bval = -127;
-				break;
-			case TYPE_sht:
-				zonemaps->zmaps[zonemaps->zmaps_cnt].min.sval = 32767;
-				zonemaps->zmaps[zonemaps->zmaps_cnt].max.sval = -32767;
-				break;
-			case TYPE_int:
-				zonemaps->zmaps[zonemaps->zmaps_cnt].min.ival = INT_MAX;
-				zonemaps->zmaps[zonemaps->zmaps_cnt].max.ival = INT_MIN;
-				break;
-			case TYPE_lng:
-				zonemaps->zmaps[zonemaps->zmaps_cnt].min.lval = LONG_MAX;
-				zonemaps->zmaps[zonemaps->zmaps_cnt].max.lval = LONG_MIN;
-				break;
-			case TYPE_oid:
-				zonemaps->zmaps[zonemaps->zmaps_cnt].min.ulval = ULONG_MAX;
-				zonemaps->zmaps[zonemaps->zmaps_cnt].max.ulval = 0;
-				break;
-			case TYPE_flt:
-				zonemaps->zmaps[zonemaps->zmaps_cnt].min.fval = FLT_MAX;
-				zonemaps->zmaps[zonemaps->zmaps_cnt].max.fval = FLT_MIN;
-				break;
-			case TYPE_dbl:
-				zonemaps->zmaps[zonemaps->zmaps_cnt].min.dval = DBL_MAX;
-				zonemaps->zmaps[zonemaps->zmaps_cnt].max.dval = -DBL_MAX;
-			}
-		}
-
-		switch(column->coltype){
-			case TYPE_bte: val.bval  = *(char*)   (column->col + i*column->typesize); upd(bval); break;
-			case TYPE_sht: val.sval  = *(short *) (column->col + i*column->typesize); upd(sval); break;
-			case TYPE_int: val.ival  = *(int*)    (column->col + i*column->typesize); upd(ival); break;
-			case TYPE_lng: val.lval  = *(long*)   (column->col + i*column->typesize); upd(lval); break;
-			case TYPE_oid: val.ulval = *(unsigned long *) (column->col + i*column->typesize); upd(ulval); break;
-			case TYPE_flt: val.fval  = *(float*)  (column->col + i*column->typesize); upd(fval);break;
-			case TYPE_dbl: val.dval  = *(double*) (column->col + i*column->typesize); upd(dval); break;
-		}
-	}
-	if ((i-1)%rpp) zonemaps->zmaps_cnt++;
-	zonemaps->zmaps_cnt++;
-	zone_create_time = usec()-t0;
-
-	VERBOSE printf("%s zonemap  creation time=%ld, %ld usec per thousand values\n", column->colname,  zone_create_time, ((long)zone_create_time*1000)/column->colcount);
-	return zonemaps;
 }
 
 void queries(Column *column, Zonemap_index *zonemaps, Imprints_index *scalar_imps, Imprints_index *simd_imps, Imprints_index **exper_imps)

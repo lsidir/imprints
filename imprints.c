@@ -4,6 +4,8 @@
 
 #include "simd_imprints.h"
 
+void binning(Column *column, ValRecord *bounds, int *bins, int max_bins);
+
 Imprints_index *
 scalar_imprints(Column *column, Imprints_index *imps)
 {

@@ -127,9 +127,8 @@ typedef struct {
 
 
 /* function declarations */
-
-void binning(Column *column, ValRecord *bounds, int *bins, int max_bins);
 Imprints_index* create_imprints(Column *column, int blocksize, int max_bins, int simd);
+Zonemap_index*  create_zonemaps(Column *column, int blocksize);
 
 
 /* utils */
