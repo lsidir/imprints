@@ -1,7 +1,22 @@
-all: simd_imprints
+IDIR =include
+CC=clang
+CFLAGS=-I$(IDIR) -O3 -g -Wall -march=native
+ODIR=src
+LIBS=-lm
 
-simd_imprints: main.c utils.c queries.c print.c imprints.c zonemaps.c main.h
-	clang -O3 -g -Wall -march=native utils.c queries.c print.c imprints.c main.c zonemaps.c -lm -o simd_imprints
+_DEPS = main.h
+DEPS = $(patsubst %,$(IDIR)/%,$(_DEPS))
+
+_OBJ = main.o utils.o queries.o print.o imprints.o zonemaps.o
+OBJ = $(patsubst %,$(ODIR)/%,$(_OBJ))
+
+$(ODIR)/%.o: %.c $(DEPS)
+	$(CC) -c -o $@ $< $(CFLAGS)
+
+imprints: $(OBJ)
+	$(CC) -o $@ $^ $(CFLAGS) $(LIBS)
+
+.PHONY: clean
 
 clean:
-	rm simd_imprints
+	rm -f $(ODIR)/*.o *~ core $(INCDIR)/*~

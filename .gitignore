@@ -1,4 +1,6 @@
 simd_imprints
+imprints
+*.o
 *.swp
 DaMoN-paper/damon2017-simd-imprints.aux
 DaMoN-paper/damon2017-simd-imprints.bbl
