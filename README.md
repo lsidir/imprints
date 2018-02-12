@@ -9,7 +9,7 @@ Source files under `src/`. Header files under `include/`.
 make
 ```
 
-Executable file is `imprints`. Check also `run-all.sh` for an example.
+Executable file is `imprints`. Check also `run-all.sh` for examples on how to invoke imprints.
 
 ## ToDo list
 
