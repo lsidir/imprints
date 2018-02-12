@@ -41,7 +41,6 @@
 #define PAGESIZE 64
 #endif
 
-
 /* Using MonetDB style types */
 #define TYPE_void   0
 #define TYPE_bte    3
@@ -125,22 +124,16 @@ typedef struct {
 	int           zonesize; /* bytes per zone */
 } Zonemap_index;
 
-
 /* function declarations */
 Imprints_index* create_imprints(Column *column, int blocksize, int max_bins, int simd);
 Zonemap_index*  create_zonemaps(Column *column, int blocksize);
-
+void queries(Column *column, Zonemap_index *zonemaps, Imprints_index *scalar_imps,
+             Imprints_index *simd_imps, Imprints_index **exper_imps);
 
 /* utils */
 void isSorted(Column *column);
 long usec();
 __m256i setbit_256(__m256i x,int k);
-
-/* queries */
-unsigned long simple_scan(Column *column, ValRecord low, ValRecord high, long *timer);
-unsigned long imprints_scan(Column *column, Imprints_index *imps, ValRecord low, ValRecord high, long *timer);
-unsigned long imprints_simd_scan(Column *column, Imprints_index *imps, ValRecord low, ValRecord high, long *timer);
-unsigned long zonemaps_scan(Column *column, Zonemap_index *zmaps, ValRecord low, ValRecord high, long *timer);
 
 /* helper functions */
 void compareImprintsIndex(Column *column, Imprints_index *imps1, Imprints_index *imps2);

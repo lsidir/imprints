@@ -2,12 +2,7 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
-#include "simd_imprints.h"
-
-/* timing variables */
-long zone_create_time;
-long imprints_create_time;
-long simd_imprints_create_time;
+#include "main.h"
 
 void queries(Column *column, Zonemap_index *zonemaps, Imprints_index *scalar_imps, Imprints_index *simd_imps, Imprints_index **exper_imps);
 void simd_queries(Column *column, Imprints_index *imps, ValRecord low, ValRecord high, long results);
@@ -137,8 +132,8 @@ int main(int argc, char **argv)
 	/* create equivelant simd imprints */
 	simd_imps = create_imprints(column, 64, 64, 1);
 
+	/* create more versions of simd imprints with different bitvector and block sizes */
 	exper_imps = (Imprints_index **)malloc(sizeof(Imprints_index *) * 9);
-
 	exper_imps[0] = create_imprints(column, 64, 64, 1);
 	exper_imps[1] = create_imprints(column, 64, 128, 1);
 	exper_imps[2] = create_imprints(column, 64, 256, 1);
@@ -148,120 +143,10 @@ int main(int argc, char **argv)
 	exper_imps[6] = create_imprints(column, 256, 64, 1);
 	exper_imps[7] = create_imprints(column, 256, 128, 1);
 	exper_imps[8] = create_imprints(column, 256, 256, 1);
-	/* run queries */
+
+	/* run the queries */
 	queries(column, zonemaps, scalar_imps, simd_imps, exper_imps);
 
 	VERBOSE printf("end of run\n");
 	return 1;
-}
-
-void queries(Column *column, Zonemap_index *zonemaps, Imprints_index *scalar_imps, Imprints_index *simd_imps, Imprints_index **exper_imps)
-{
-	unsigned long res_cnt;
-	unsigned long tuples[REPETITION];
-	ValRecord low, high;
-	long dummy, basetimer[REPETITION], zonetimer[REPETITION], impstimer[REPETITION], simd_impstimer[REPETITION];
-	int i;
-
-	for (i = 0; i < REPETITION; i++) {
-		tuples[i] = 0;
-		basetimer[i] = impstimer[i] = simd_impstimer[i] = zonetimer[i] = 0;
-	}
-
-	for (i = 0; i < REPETITION; i++) {
-		genQueryRange(column, scalar_imps, i, &low, &high);
-
-		/* simple scan */
-		tuples[i] = simple_scan(column, low, high, &(basetimer[i]));
-
-		res_cnt = zonemaps_scan(column, zonemaps, low, high, &(zonetimer[i]));
-		if (tuples[i] != res_cnt) {
-			printf("%s expecting %lu results and got %lu results from zonemaps\n", column->colname, tuples[i], res_cnt);
-		}
-
-		res_cnt = imprints_scan(column, scalar_imps, low, high, &(impstimer[i]));
-		if (tuples[i] != res_cnt) {
-			printf("%s expecting %lu results and got %lu results from scalar imprints\n", column->colname, tuples[i], res_cnt);
-		}
-
-		res_cnt = imprints_scan(column, simd_imps, low, high, &dummy);
-		if (tuples[i] != res_cnt) {
-			printf("%s expecting %lu results and got %lu results from simd imprints run on scalar queries (for debuging)\n", column->colname, tuples[i], res_cnt);
-		}
-
-		res_cnt = imprints_simd_scan(column, simd_imps, low, high, &(simd_impstimer[i]));
-		if (tuples[i] != res_cnt) {
-			printf("%s expecting %lu results and got %lu results from simd imprints\n", column->colname, tuples[i], res_cnt);
-		}
-
-		for (int k = 0; k < 9; k++) {
-			res_cnt = imprints_simd_scan(column, exper_imps[k], low, high, &dummy);
-			printf("%s "
-					   "query[%d]=%12ld "
-					   "selectivity=%2.1f%% \t"
-					   "bins = %d \t"
-					   "blocksize = %d(bytes)\t"
-					   "simd_imprints = %ld"
-					   "(usec)\n",
-					   column->colname,
-					   i, tuples[i],
-					   tuples[i]* 100.0/column->colcount,
-					   exper_imps[k]->bins,
-					   exper_imps[k]->blocksize,
-					   dummy
-					   );
-		}
-	}
-
-	for (i = 0; i < REPETITION; i++) {
-		VERBOSE printf("%s "
-					   "query[%d]=%12ld "
-					   "selectivity=%2.1f%% \t"
-					   "scan = %ld \t"
-					   "zone = %ld \t"
-					   "imprints = %ld \t"
-					   "simd_imprints = %ld "
-					   "(usec)\n",
-					   column->colname,
-					   i, tuples[i],
-					   tuples[i]* 100.0/column->colcount,
-					   basetimer[i],
-					   zonetimer[i],
-					   impstimer[i],
-					   simd_impstimer[i]);
-	}
-}
-
-/* simulate a series of queries */
-void genQueryRange(Column *column, Imprints_index *imps, int selectivity, ValRecord *low, ValRecord *high)
-{
-#define setqueryrange(X)																\
-	(*low).X = imps->bounds[1].X;					\
-	(*high).X = (*low).X + selectivity * column->max.X/ (100.0/REPETITION);;			\
-	if ((*high).X > column->max.X) (*high).X  = column->max.X;							\
-	if ((*low).X > (*high).X) (*low).X = (*high).X;										\
-	
-	switch (column->coltype) {
-	case TYPE_bte:
-		setqueryrange(bval);
-		break;
-	case TYPE_sht:
-		setqueryrange(sval);
-		break;
-	case TYPE_int:
-		setqueryrange(ival);
-		break;
-	case TYPE_lng:
-		setqueryrange(lval);
-		break;
-	case TYPE_oid:
-		setqueryrange(ulval);
-		break;
-	case TYPE_flt:
-		setqueryrange(fval);
-		break;
-	case TYPE_dbl:
-		setqueryrange(dval);
-	}
-	return;
 }
